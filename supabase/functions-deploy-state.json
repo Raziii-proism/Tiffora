@@ -1,0 +1,29 @@
+{
+  "projectId": "70275901",
+  "functions": {
+    "bulk-create-students": {
+      "hasChanged": false,
+      "hash": "052b9e1dd8d8125b796af95d2f010b8662e97c407ec375923974ca1c0871ee9d"
+    },
+    "create-hostel": {
+      "hasChanged": false,
+      "hash": "5605b64ebc6263ba5f2e400d6743cd1c242ebb4cda53c28cb13303e223befd5e"
+    },
+    "create-student": {
+      "hasChanged": false,
+      "hash": "67d81022f4f3be35856b51e18ebdd438d2142895b1cfd7839706b8c9a276450d"
+    },
+    "create-warden": {
+      "hasChanged": false,
+      "hash": "3bbb2f96e453bcb4fee973e211d6cbf06d487e6be2a826880f01f1ecc926abfe"
+    },
+    "delete-student": {
+      "hasChanged": false,
+      "hash": "e7f07abbefa4914ef9e571da46b0c877ef3c2a28485ca91b4d82547e08526b8c"
+    },
+    "verify-admin": {
+      "hasChanged": false,
+      "hash": "3ba93e479bddc558e06ab81668836c28206a97e29d6c22661b7654f211cf1806"
+    }
+  }
+}
