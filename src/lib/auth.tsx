@@ -13,6 +13,7 @@ type AuthContextType = {
   loading: boolean;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  getAccessToken: () => Promise<string | null>;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -79,28 +80,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
+  async function getAccessToken(): Promise<string | null> {
+    const { data: { session: s } } = await supabase.auth.getSession();
+    if (s?.access_token) {
       setSession(s);
-      setUser(s?.user ?? null);
-      if (s?.user) {
-        loadProfile(s.user).finally(() => setLoading(false));
-      } else {
-        setLoading(false);
-      }
-    });
+      setUser(s.user ?? null);
+      return s.access_token;
+    }
+    return null;
+  }
 
+  useEffect(() => {
+    let isMounted = true;
+
+    // Listen for auth state changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, s) => {
+    } = supabase.auth.onAuthStateChange(async (event, s) => {
+      if (!isMounted) return;
+
       setSession(s);
       setUser(s?.user ?? null);
+
+      if (event === 'TOKEN_REFRESHED') {
+        // Token was silently refreshed; keep current state without resetting UI loading
+        return;
+      }
+
       if (s?.user) {
         setLoading(true);
-        (async () => {
+        try {
           await loadProfile(s.user);
-          setLoading(false);
-        })();
+        } finally {
+          if (isMounted) setLoading(false);
+        }
       } else {
         setRole(null);
         setHostel(null);
@@ -110,7 +123,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    return () => subscription.unsubscribe();
+    // Initial session load
+    supabase.auth.getSession().then(async ({ data: { session: s } }) => {
+      if (!isMounted) return;
+      setSession(s);
+      setUser(s?.user ?? null);
+      if (s?.user) {
+        try {
+          await loadProfile(s.user);
+        } finally {
+          if (isMounted) setLoading(false);
+        }
+      } else {
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function signOut() {
@@ -123,7 +155,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ session, user, role, hostel, student, warden, loading, signOut, refreshProfile }}
+      value={{ session, user, role, hostel, student, warden, loading, signOut, refreshProfile, getAccessToken }}
     >
       {children}
     </AuthContext.Provider>

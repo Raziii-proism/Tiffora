@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { UserPlus, User, Mail, Trash2, X, Loader2, ChevronLeft, ChevronRight, CheckCircle2, XCircle, Search } from 'lucide-react';
+import { UserPlus, User, Trash2, X, Loader2, ChevronLeft, ChevronRight, CheckCircle2, XCircle, Search, DoorOpen, Phone } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 import type { Student, Hostel, Absence, MessLeave } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { EmptyState, ErrorBanner } from '@/components/Feedback';
 import { StudentActionsMenu } from '@/components/StudentActionsMenu';
 import { EditStudentModal } from '@/components/EditStudentModal';
 import { RandomAttendanceModal } from '@/components/RandomAttendanceModal';
-import { deleteStudentAccount } from '@/lib/students';
+import { createStudentAccount, deleteStudentAccount } from '@/lib/students';
 import { getDaysInMonth, getMonthName, formatCurrency, todayString, dateRange } from '@/lib/utils';
 
 type WardenStudentsProps = {
@@ -34,14 +35,10 @@ export function WardenStudents({ students, absences, messLeaves, hostel, onDataC
 
   async function removeStudent(student: Student): Promise<boolean> {
     if (!confirm(`Remove ${student.full_name}? This will delete their account.`)) return false;
-    if (!session) {
-      setActionError('Your session has expired. Please sign in again.');
-      return false;
-    }
     setRemovingId(student.id);
     setActionError(null);
     try {
-      await deleteStudentAccount(student.id, session.access_token);
+      await deleteStudentAccount(student.id);
       onDataChange();
       return true;
     } catch (err) {
@@ -248,7 +245,7 @@ function AddStudentModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const { user } = useAuth();
+  const { getAccessToken } = useAuth();
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -257,35 +254,38 @@ function AddStudentModal({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setError(null);
 
+    const token = await getAccessToken();
+    if (!token) {
+      setError("Your session has expired. Please sign out and sign in again.");
+      return;
+    }
+
+    setLoading(true);
+
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const response = await fetch(`${supabaseUrl}/functions/v1/create-student`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({
+      await createStudentAccount(
+        {
           email,
           password,
           fullName,
           hostelId: hostel.id,
-          wardenUserId: user?.id,
-        }),
-      });
+        },
+        token
+      );
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to create student');
-      }
+      setFullName("");
+      setEmail("");
+      setPassword("");
 
       onSuccess();
+      onClose();
     } catch (err) {
-      setError((err as Error).message);
+      console.error("Create student error:", err);
+      setError(
+        err instanceof Error ? err.message : "Something went wrong"
+      );
     } finally {
       setLoading(false);
     }
@@ -327,7 +327,7 @@ function AddStudentModal({
           <div>
             <label className="label-text">Password</label>
             <input
-              type="text"
+              type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Temporary password"
@@ -432,7 +432,8 @@ function StudentDetailModal({
         </div>
 
         <div className="space-y-3">
-          <DetailRow icon={Mail} label="Email" value={student.id} />
+          {student.room_no && <DetailRow icon={DoorOpen} label="Room" value={`Room ${student.room_no}`} />}
+          {student.phone && <DetailRow icon={Phone} label="Phone" value={student.phone} />}
         </div>
 
         {/* Attendance Calendar */}

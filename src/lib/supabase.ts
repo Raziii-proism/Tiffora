@@ -49,6 +49,10 @@ export type Bill = {
   month: string;
   present_days: number;
   amount: number;
+  mess_amount?: number | null;
+  common_amount?: number | null;
+  allowance_amount?: number | null;
+  room_rent_amount?: number | null;
   status: string;
   paid_at: string | null;
   created_at: string;

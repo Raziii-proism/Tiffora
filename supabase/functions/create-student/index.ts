@@ -6,20 +6,30 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+function jsonResponse(body: Record<string, unknown>, status: number) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   try {
-    const { email, password, fullName, hostelId, wardenUserId } =
-      await req.json();
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader?.replace(/^Bearer\s+/i, "");
 
-    if (!email || !password || !fullName || !hostelId || !wardenUserId) {
-      return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (!token) {
+      return jsonResponse({ error: "Invalid or expired session" }, 401);
+    }
+
+    const { email, password, fullName, hostelId } = await req.json();
+
+    if (!email || !password || !fullName || !hostelId) {
+      return jsonResponse({ error: "Missing required fields" }, 400);
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -28,6 +38,14 @@ Deno.serve(async (req: Request) => {
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
+
+    // Verify token using adminClient.auth.getUser(token)
+    const { data: userData, error: userError } = await adminClient.auth.getUser(token);
+    if (userError || !userData?.user) {
+      return jsonResponse({ error: "Invalid or expired session" }, 401);
+    }
+
+    const wardenUserId = userData.user.id;
 
     // Verify the caller is a warden of this hostel
     const { data: warden, error: wardenError } = await adminClient
@@ -38,24 +56,18 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (wardenError || !warden) {
-      return new Response(
-        JSON.stringify({ error: "Not authorized to add students to this hostel" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({ error: "Not authorized to add students to this hostel" }, 403);
     }
 
     // Create the student auth account
     const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
-      email,
+      email: email.trim().toLowerCase(),
       password,
       email_confirm: true,
     });
 
     if (authError) {
-      return new Response(
-        JSON.stringify({ error: authError.message }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({ error: authError.message }, 400);
     }
 
     const studentUserId = authData.user.id;
@@ -64,26 +76,17 @@ Deno.serve(async (req: Request) => {
     const { error: insertError } = await adminClient.from("students").insert({
       id: studentUserId,
       hostel_id: hostelId,
-      full_name: fullName,
+      full_name: fullName.trim(),
     });
 
     if (insertError) {
       // Clean up the auth user if insert fails
       await adminClient.auth.admin.deleteUser(studentUserId);
-      return new Response(
-        JSON.stringify({ error: insertError.message }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({ error: insertError.message }, 400);
     }
 
-    return new Response(
-      JSON.stringify({ success: true, studentId: studentUserId }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse({ success: true, studentId: studentUserId }, 200);
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: (err as Error).message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse({ error: (err as Error).message }, 500);
   }
 });

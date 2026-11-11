@@ -22,7 +22,11 @@ Deno.serve(async (req: Request) => {
     const token = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
     const { studentId } = await req.json();
 
-    if (!token || !studentId) {
+    if (!token) {
+      return jsonResponse({ error: "Invalid or expired session" }, 401);
+    }
+
+    if (!studentId) {
       return jsonResponse({ error: "Missing required fields" }, 400);
     }
 
@@ -34,8 +38,8 @@ Deno.serve(async (req: Request) => {
     });
 
     const { data: userData, error: userError } = await adminClient.auth.getUser(token);
-    if (userError || !userData.user) {
-      return jsonResponse({ error: "Not signed in" }, 401);
+    if (userError || !userData?.user) {
+      return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
 
     const { data: student, error: studentError } = await adminClient

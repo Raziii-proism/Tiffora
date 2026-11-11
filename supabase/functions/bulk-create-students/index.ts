@@ -6,6 +6,13 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+function jsonResponse(body: Record<string, unknown>, status: number) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 function slugify(name: string): string {
   return name
     .toLowerCase()
@@ -22,13 +29,17 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { students, hostelId, wardenUserId } = await req.json();
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader?.replace(/^Bearer\s+/i, "");
 
-    if (!students || !Array.isArray(students) || !hostelId || !wardenUserId) {
-      return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (!token) {
+      return jsonResponse({ error: "Invalid or expired session" }, 401);
+    }
+
+    const { students, hostelId } = await req.json();
+
+    if (!students || !Array.isArray(students) || !hostelId) {
+      return jsonResponse({ error: "Missing required fields" }, 400);
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -37,6 +48,13 @@ Deno.serve(async (req: Request) => {
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
+
+    const { data: userData, error: userError } = await adminClient.auth.getUser(token);
+    if (userError || !userData?.user) {
+      return jsonResponse({ error: "Invalid or expired session" }, 401);
+    }
+
+    const wardenUserId = userData.user.id;
 
     // Verify the caller is a warden of this hostel
     const { data: warden, error: wardenError } = await adminClient
@@ -47,10 +65,7 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (wardenError || !warden) {
-      return new Response(
-        JSON.stringify({ error: "Not authorized" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({ error: "Not authorized to add students to this hostel" }, 403);
     }
 
     const domain = "wisdomhomes.in";
@@ -113,14 +128,8 @@ Deno.serve(async (req: Request) => {
       results.push({ name: fullName, email, password, status: "created" });
     }
 
-    return new Response(
-      JSON.stringify({ success: true, results }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse({ success: true, results }, 200);
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: (err as Error).message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse({ error: (err as Error).message }, 500);
   }
 });
