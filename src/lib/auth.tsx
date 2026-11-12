@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
+import { supabase, getValidAccessToken } from '@/lib/supabase';
 import type { Hostel, UserRole, Student, Warden } from '@/lib/supabase';
 
 type AuthContextType = {
@@ -81,13 +81,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function getAccessToken(): Promise<string | null> {
-    const { data: { session: s } } = await supabase.auth.getSession();
-    if (s?.access_token) {
-      setSession(s);
-      setUser(s.user ?? null);
-      return s.access_token;
+    const token = await getValidAccessToken();
+    if (token) {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      if (s) {
+        setSession(s);
+        setUser(s.user ?? null);
+      }
     }
-    return null;
+    return token;
   }
 
   useEffect(() => {

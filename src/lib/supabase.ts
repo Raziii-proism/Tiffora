@@ -10,6 +10,30 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
+/**
+ * Returns a valid, non-expired Supabase access token.
+ * Refreshes the token automatically if expired or expiring within 60 seconds.
+ */
+export async function getValidAccessToken(): Promise<string | null> {
+  const { data: { session }, error } = await supabase.auth.getSession();
+  if (error || !session) return null;
+
+  const expiresAt = session.expires_at ? session.expires_at * 1000 : 0;
+  // If token is missing expires_at or expires within 60 seconds (or is already expired)
+  if (!expiresAt || expiresAt - Date.now() < 60000) {
+    const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+    if (!refreshError && refreshed?.session) {
+      return refreshed.session.access_token;
+    }
+    // If refresh failed and token is already expired, it cannot be used
+    if (expiresAt && expiresAt <= Date.now()) {
+      return null;
+    }
+  }
+
+  return session.access_token;
+}
+
 export type Hostel = {
   id: string;
   name: string;

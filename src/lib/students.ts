@@ -1,5 +1,7 @@
 
-import { supabase } from '@/lib/supabase';
+import { supabase, getValidAccessToken } from '@/lib/supabase';
+
+export { getValidAccessToken };
 
 export interface CreateStudentParams {
   email: string;
@@ -16,47 +18,13 @@ export interface BulkCreateStudentsResult {
   error?: string;
 }
 
-/**
- * Gets the logged-in user's access token.
- * Refreshes the session if the token is about to expire.
- */
-export async function getValidAccessToken(): Promise<string | null> {
-  try {
-    const { data, error } = await supabase.auth.getSession();
-
-    if (error || !data.session) {
-      console.error('[AUTH DEBUG] No session found:', error?.message);
-      return null;
-    }
-
-    const expiresAt = data.session.expires_at ?? 0;
-    const now = Math.floor(Date.now() / 1000);
-
-    if (expiresAt <= now + 60) {
-      const { data: refreshed, error: refreshError } =
-        await supabase.auth.refreshSession();
-
-      if (refreshError) {
-        console.error('[AUTH DEBUG] Refresh failed:', refreshError.message);
-        return null;
-      }
-
-      return refreshed.session?.access_token ?? null;
-    }
-
-    return data.session.access_token;
-  } catch (error) {
-    console.error('[AUTH DEBUG] Token retrieval failed:', error);
-    return null;
-  }
-}
-
 async function extractErrorMessage(
   fnError: unknown,
-  data?: { error?: string } | null,
+  data?: { error?: string; message?: string } | null,
   fallbackMessage = 'Request failed'
 ): Promise<string> {
   if (data?.error) return data.error;
+  if (data?.message) return data.message;
 
   if (fnError && typeof fnError === 'object' && 'context' in fnError) {
     try {
@@ -65,6 +33,7 @@ async function extractErrorMessage(
       if (ctx && typeof ctx.json === 'function') {
         const body = await ctx.json();
         if (body?.error) return body.error;
+        if (body?.message) return body.message;
       }
     } catch {
       // Ignore response parsing errors
@@ -85,7 +54,7 @@ export async function createStudentAccount(
   params: CreateStudentParams,
   providedToken?: string
 ): Promise<{ studentId: string }> {
-  const token = await getValidAccessToken() || providedToken;
+  const token = (await getValidAccessToken()) || providedToken;
 
   // Safe diagnostics: never print the complete token.
   console.log('[AUTH DEBUG] Create student:', {
@@ -129,6 +98,7 @@ export async function createStudentAccount(
     success?: boolean;
     studentId?: string;
     error?: string;
+    message?: string;
   };
 
   try {
@@ -138,7 +108,7 @@ export async function createStudentAccount(
   }
 
   if (!response.ok || !data?.success) {
-    throw new Error(data?.error || 'Failed to create student');
+    throw new Error(data?.error || data?.message || 'Failed to create student');
   }
 
   if (!data.studentId) {

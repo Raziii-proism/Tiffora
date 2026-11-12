@@ -19,10 +19,17 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const token = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader?.replace(/^Bearer\s+/i, "");
     const { studentId } = await req.json();
 
+    // Safe diagnostic log: reveals only existence and length, never token content
+    console.log(
+      `[delete-student] Auth check: token exists = ${Boolean(token)}, length = ${token ? token.length : 0}`
+    );
+
     if (!token) {
+      console.warn("[delete-student] Auth rejection: missing token in Authorization header");
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
 
@@ -33,12 +40,16 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+    // Admin client for privileged database and auth admin operations
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
     const { data: userData, error: userError } = await adminClient.auth.getUser(token);
     if (userError || !userData?.user) {
+      console.warn(
+        `[delete-student] Auth verification failed: ${userError?.message || "No user returned"}`
+      );
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
 

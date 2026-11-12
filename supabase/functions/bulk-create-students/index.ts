@@ -32,7 +32,13 @@ Deno.serve(async (req: Request) => {
     const authHeader = req.headers.get("Authorization");
     const token = authHeader?.replace(/^Bearer\s+/i, "");
 
+    // Safe diagnostic log: reveals only existence and length, never token content
+    console.log(
+      `[bulk-create-students] Auth check: token exists = ${Boolean(token)}, length = ${token ? token.length : 0}`
+    );
+
     if (!token) {
+      console.warn("[bulk-create-students] Auth rejection: missing token in Authorization header");
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
 
@@ -45,12 +51,16 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+    // Admin client for privileged database and auth admin operations
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
     const { data: userData, error: userError } = await adminClient.auth.getUser(token);
     if (userError || !userData?.user) {
+      console.warn(
+        `[bulk-create-students] Auth verification failed: ${userError?.message || "No user returned"}`
+      );
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
 
