@@ -17,7 +17,7 @@ export interface BulkCreateStudentsResult {
 }
 
 /**
- * Gets the actual logged-in user's access token.
+ * Gets the logged-in user's access token.
  * Refreshes the session if the token is about to expire.
  */
 export async function getValidAccessToken(): Promise<string | null> {
@@ -25,6 +25,7 @@ export async function getValidAccessToken(): Promise<string | null> {
     const { data, error } = await supabase.auth.getSession();
 
     if (error || !data.session) {
+      console.error('[AUTH DEBUG] No session found:', error?.message);
       return null;
     }
 
@@ -36,7 +37,7 @@ export async function getValidAccessToken(): Promise<string | null> {
         await supabase.auth.refreshSession();
 
       if (refreshError) {
-        console.error('Session refresh failed:', refreshError.message);
+        console.error('[AUTH DEBUG] Refresh failed:', refreshError.message);
         return null;
       }
 
@@ -45,7 +46,7 @@ export async function getValidAccessToken(): Promise<string | null> {
 
     return data.session.access_token;
   } catch (error) {
-    console.error('Could not retrieve access token:', error);
+    console.error('[AUTH DEBUG] Token retrieval failed:', error);
     return null;
   }
 }
@@ -66,7 +67,7 @@ async function extractErrorMessage(
         if (body?.error) return body.error;
       }
     } catch {
-      // Ignore parse error
+      // Ignore response parsing errors
     }
   }
 
@@ -78,14 +79,20 @@ async function extractErrorMessage(
 }
 
 /**
- * Creates a student account via the create-student Edge Function.
- * Sends the publishable key and warden access token separately.
+ * Creates a student account using the warden's access token.
  */
 export async function createStudentAccount(
   params: CreateStudentParams,
   providedToken?: string
 ): Promise<{ studentId: string }> {
-  const token = (await getValidAccessToken()) || providedToken;
+  const token = await getValidAccessToken() || providedToken;
+
+  // Safe diagnostics: never print the complete token.
+  console.log('[AUTH DEBUG] Create student:', {
+    hasToken: !!token,
+    tokenPrefix: token?.slice(0, 3),
+    providedTokenPrefix: providedToken?.slice(0, 3),
+  });
 
   if (!token || token.startsWith('sb_publishable_')) {
     throw new Error(
@@ -106,8 +113,8 @@ export async function createStudentAccount(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'apikey': publishableKey,
-        'Authorization': `Bearer ${token}`,
+        apikey: publishableKey,
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         email: params.email.trim(),
@@ -142,14 +149,14 @@ export async function createStudentAccount(
 }
 
 /**
- * Bulk creates student accounts via the bulk-create-students Edge Function.
+ * Bulk creates student accounts.
  */
 export async function bulkCreateStudents(
   hostelId: string,
   students: string[],
   providedToken?: string
 ): Promise<BulkCreateStudentsResult[]> {
-  const token = (await getValidAccessToken()) || providedToken;
+  const token = await getValidAccessToken() || providedToken;
 
   if (!token || token.startsWith('sb_publishable_')) {
     throw new Error(
@@ -159,22 +166,16 @@ export async function bulkCreateStudents(
 
   const { data, error: fnError } =
     await supabase.functions.invoke('bulk-create-students', {
-      body: {
-        hostelId,
-        students,
-      },
+      body: { hostelId, students },
       headers: {
         Authorization: `Bearer ${token}`,
       },
     });
 
   if (fnError) {
-    const errorMsg = await extractErrorMessage(
-      fnError,
-      data,
-      'Failed to bulk create students'
+    throw new Error(
+      await extractErrorMessage(fnError, data, 'Failed to bulk create students')
     );
-    throw new Error(errorMsg);
   }
 
   if (!data?.success) {
@@ -185,13 +186,13 @@ export async function bulkCreateStudents(
 }
 
 /**
- * Deletes a student account via the delete-student Edge Function.
+ * Deletes a student account.
  */
 export async function deleteStudentAccount(
   studentId: string,
   providedToken?: string
 ): Promise<void> {
-  const token = (await getValidAccessToken()) || providedToken;
+  const token = await getValidAccessToken() || providedToken;
 
   if (!token || token.startsWith('sb_publishable_')) {
     throw new Error(
@@ -208,12 +209,13 @@ export async function deleteStudentAccount(
     });
 
   if (fnError) {
-    const errorMsg = await extractErrorMessage(
-      fnError,
-      data,
-      'Could not remove this student. Please try again.'
+    throw new Error(
+      await extractErrorMessage(
+        fnError,
+        data,
+        'Could not remove this student. Please try again.'
+      )
     );
-    throw new Error(errorMsg);
   }
 
   if (!data?.success) {
