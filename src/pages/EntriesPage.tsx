@@ -1,8 +1,22 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, CalendarDays, Users, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import {
+  ArrowLeft,
+  CalendarDays,
+  Users,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Building2,
+  ChevronRight,
+} from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import type { Student, Absence, MessLeave } from '@/lib/supabase';
-import { getMonthName, getDaysInMonth, formatDate, dateRange } from '@/lib/utils';
+import {
+  getMonthName,
+  getDaysInMonth,
+  formatDate,
+  dateRange,
+} from '@/lib/utils';
 import { LoadingSpinner, ErrorBanner } from '@/components/Feedback';
 
 type EntriesPageProps = {
@@ -12,40 +26,93 @@ type EntriesPageProps = {
 const CUTOFF_HOUR = 12;
 
 export function EntriesPage({ onBack }: EntriesPageProps) {
+  const [hostels, setHostels] = useState<{ id: string; name: string }[]>([]);
+  const [selectedHostelId, setSelectedHostelId] = useState<string | null>(null);
+  const [selectedHostelName, setSelectedHostelName] = useState('');
+
   const [students, setStudents] = useState<Student[]>([]);
   const [absences, setAbsences] = useState<Absence[]>([]);
   const [messLeaves, setMessLeaves] = useState<MessLeave[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   const now = new Date();
+
   const [calendarMonth, setCalendarMonth] = useState(now.getMonth());
   const [calendarYear, setCalendarYear] = useState(now.getFullYear());
 
   const todayStr = formatDate(now);
-  const isAfterCutoff = now.getHours() > CUTOFF_HOUR || (now.getHours() === CUTOFF_HOUR && now.getMinutes() >= 10);
+
+  const isAfterCutoff =
+    now.getHours() > CUTOFF_HOUR ||
+    (now.getHours() === CUTOFF_HOUR && now.getMinutes() >= 10);
 
   useEffect(() => {
-    loadData();
+    loadHostels();
   }, []);
 
-  async function loadData() {
+  async function loadHostels() {
     setLoading(true);
     setError(null);
+
     try {
-      const [studentsRes, absencesRes, leavesRes] = await Promise.all([
-        supabase.from('students').select('*').order('full_name', { ascending: true }),
-        supabase.from('absences').select('*'),
-        supabase.from('mess_leaves').select('*'),
-      ]);
+      const { data, error: hostelsError } = await supabase
+        .from('hostels')
+        .select('id, name')
+        .order('name', { ascending: true });
+
+      if (hostelsError) throw hostelsError;
+
+      setHostels(data || []);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadData(hostelId: string) {
+    setLoading(true);
+    setError(null);
+    setSelectedDate(null);
+
+    try {
+      const studentsRes = await supabase
+        .from('students')
+        .select('*')
+        .eq('hostel_id', hostelId)
+        .order('full_name', { ascending: true });
 
       if (studentsRes.error) throw studentsRes.error;
-      if (absencesRes.error) throw absencesRes.error;
+
+      const studentIds = (studentsRes.data || []).map(
+        (student) => student.id
+      );
+
+      let absencesData: Absence[] = [];
+
+      if (studentIds.length > 0) {
+        const absencesRes = await supabase
+          .from('absences')
+          .select('*')
+          .in('student_id', studentIds);
+
+        if (absencesRes.error) throw absencesRes.error;
+
+        absencesData = absencesRes.data || [];
+      }
+
+      const leavesRes = await supabase
+        .from('mess_leaves')
+        .select('*')
+        .eq('hostel_id', hostelId);
+
       if (leavesRes.error) throw leavesRes.error;
 
       setStudents(studentsRes.data || []);
-      setAbsences(absencesRes.data || []);
+      setAbsences(absencesData);
       setMessLeaves(leavesRes.data || []);
     } catch (err) {
       setError((err as Error).message);
@@ -54,10 +121,22 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
     }
   }
 
+  function handleSelectHostel(hostel: { id: string; name: string }) {
+    setSelectedHostelId(hostel.id);
+    setSelectedHostelName(hostel.name);
+    loadData(hostel.id);
+  }
+
   const daysInMonth = getDaysInMonth(calendarYear, calendarMonth);
-  const firstDayOfWeek = new Date(calendarYear, calendarMonth, 1).getDay();
+
+  const firstDayOfWeek = new Date(
+    calendarYear,
+    calendarMonth,
+    1
+  ).getDay();
 
   const messLeaveDates = new Set<string>();
+
   for (const ml of messLeaves) {
     for (const d of dateRange(ml.start_date, ml.end_date)) {
       messLeaveDates.add(d);
@@ -70,19 +149,35 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
 
   function getPresentCountForDate(dateStr: string): number {
     if (isMessLeaveDay(dateStr)) return 0;
-    const absentIds = absences.filter((a) => a.absent_date === dateStr).map((a) => a.student_id);
+
+    const absentIds = absences
+      .filter((a) => a.absent_date === dateStr)
+      .map((a) => a.student_id);
+
     return students.length - absentIds.length;
   }
 
   function getPresentStudentsForDate(dateStr: string): Student[] {
     if (isMessLeaveDay(dateStr)) return [];
-    const absentIds = new Set(absences.filter((a) => a.absent_date === dateStr).map((a) => a.student_id));
+
+    const absentIds = new Set(
+      absences
+        .filter((a) => a.absent_date === dateStr)
+        .map((a) => a.student_id)
+    );
+
     return students.filter((s) => !absentIds.has(s.id));
   }
 
   function getAbsentStudentsForDate(dateStr: string): Student[] {
     if (isMessLeaveDay(dateStr)) return students;
-    const absentIds = new Set(absences.filter((a) => a.absent_date === dateStr).map((a) => a.student_id));
+
+    const absentIds = new Set(
+      absences
+        .filter((a) => a.absent_date === dateStr)
+        .map((a) => a.student_id)
+    );
+
     return students.filter((s) => absentIds.has(s.id));
   }
 
@@ -104,9 +199,17 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
     }
   }
 
-  const todayPresentCount = isAfterCutoff ? getPresentCountForDate(todayStr) : null;
-  const selectedPresent = selectedDate ? getPresentStudentsForDate(selectedDate) : [];
-  const selectedAbsent = selectedDate ? getAbsentStudentsForDate(selectedDate) : [];
+  const todayPresentCount = isAfterCutoff
+    ? getPresentCountForDate(todayStr)
+    : null;
+
+  const selectedPresent = selectedDate
+    ? getPresentStudentsForDate(selectedDate)
+    : [];
+
+  const selectedAbsent = selectedDate
+    ? getAbsentStudentsForDate(selectedDate)
+    : [];
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -119,36 +222,121 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
           >
             <ArrowLeft size={20} />
           </button>
+
           <div>
-            <p className="text-sm font-bold text-slate-900">Entries</p>
-            <p className="text-[11px] text-slate-500">Daily attendance overview</p>
+            <p className="text-sm font-bold text-slate-900">
+              Entries
+            </p>
+
+            <p className="text-[11px] text-slate-500">
+              {selectedHostelId
+                ? `${selectedHostelName} · Daily attendance`
+                : 'Select a hostel to view attendance'}
+            </p>
           </div>
         </div>
       </div>
 
       <div className="mx-auto max-w-md px-4 py-4 space-y-4">
         {loading ? (
-          <LoadingSpinner message="Loading attendance..." />
+          <LoadingSpinner
+            message={
+              selectedHostelId
+                ? 'Loading attendance...'
+                : 'Loading hostels...'
+            }
+          />
+        ) : !selectedHostelId ? (
+          <>
+            {error && <ErrorBanner message={error} />}
+
+            <div className="mb-2">
+              <h2 className="text-base font-bold text-slate-900">
+                Select Hostel
+              </h2>
+
+              <p className="mt-1 text-xs text-slate-500">
+                Choose a hostel to view its daily attendance overview.
+              </p>
+            </div>
+
+            {hostels.length === 0 ? (
+              <div className="card text-center py-8">
+                <Building2 className="mx-auto h-8 w-8 text-slate-300" />
+
+                <p className="mt-3 text-sm font-semibold text-slate-700">
+                  No hostels found
+                </p>
+              </div>
+            ) : (
+              hostels.map((hostel) => (
+                <button
+                  key={hostel.id}
+                  onClick={() => handleSelectHostel(hostel)}
+                  className="card w-full flex items-center gap-3 text-left hover:border-teal-300 hover:bg-teal-50/40 transition-colors"
+                >
+                  <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                    <Building2 size={21} />
+                  </span>
+
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold text-slate-800">
+                      {hostel.name}
+                    </span>
+
+                    <span className="block text-[11px] text-slate-500">
+                      View daily attendance
+                    </span>
+                  </span>
+
+                  <ChevronRight size={18} className="text-slate-400" />
+                </button>
+              ))
+            )}
+          </>
         ) : (
           <>
+            <button
+              onClick={() => {
+                setSelectedHostelId(null);
+                setSelectedHostelName('');
+                setSelectedDate(null);
+              }}
+              className="flex items-center gap-2 text-xs font-semibold text-teal-700 hover:text-teal-900"
+            >
+              <ArrowLeft size={15} />
+              Change hostel
+            </button>
+
             {error && <ErrorBanner message={error} />}
 
             {/* Today's attendance count */}
             <div className="rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-700 p-5 text-white shadow-lg shadow-teal-600/20">
               <div className="flex items-center gap-2 mb-2">
                 <Users className="h-5 w-5 text-teal-100" />
+
                 <p className="text-sm text-teal-100">
-                  {now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                  {now.toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    month: 'short',
+                    day: 'numeric',
+                  })}
                 </p>
               </div>
+
               {todayPresentCount !== null ? (
                 <>
-                  <p className="text-4xl font-bold">{todayPresentCount}</p>
+                  <p className="text-4xl font-bold">
+                    {todayPresentCount}
+                  </p>
+
                   <p className="mt-1 text-xs text-teal-100">
                     Students present today out of {students.length}
                   </p>
+
                   <div className="mt-3 flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2">
                     <CheckCircle2 className="h-4 w-4 text-emerald-200" />
+
                     <p className="text-xs text-teal-50">
                       Attendance is now locked for today. No further changes can be made.
                     </p>
@@ -156,9 +344,13 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
                 </>
               ) : (
                 <>
-                  <p className="text-2xl font-bold text-teal-50">Not yet available</p>
+                  <p className="text-2xl font-bold text-teal-50">
+                    Not yet available
+                  </p>
+
                   <div className="mt-3 flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2">
                     <Clock className="h-4 w-4 text-amber-200" />
+
                     <p className="text-xs text-teal-50">
                       Today's attendance count will be displayed after 12:10 PM.
                     </p>
@@ -176,9 +368,11 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
                 >
                   <ArrowLeft size={18} />
                 </button>
+
                 <p className="text-sm font-bold text-slate-900">
                   {getMonthName(calendarMonth)} {calendarYear}
                 </p>
+
                 <button
                   onClick={handleNextMonth}
                   className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
@@ -190,7 +384,10 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
               {/* Day labels */}
               <div className="grid grid-cols-7 gap-1 mb-2">
                 {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
-                  <div key={i} className="text-center text-[10px] font-semibold text-slate-400 py-1">
+                  <div
+                    key={i}
+                    className="text-center text-[10px] font-semibold text-slate-400 py-1"
+                  >
                     {d}
                   </div>
                 ))}
@@ -201,9 +398,14 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
                 {Array.from({ length: firstDayOfWeek }).map((_, i) => (
                   <div key={`empty-${i}`} />
                 ))}
+
                 {Array.from({ length: daysInMonth }).map((_, i) => {
                   const day = i + 1;
-                  const dateStr = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+                  const dateStr = `${calendarYear}-${String(
+                    calendarMonth + 1
+                  ).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
                   const presentCount = getPresentCountForDate(dateStr);
                   const isToday = dateStr === todayStr;
                   const isSelected = dateStr === selectedDate;
@@ -229,9 +431,16 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
                               : 'text-slate-700 hover:bg-slate-100'
                       }`}
                     >
-                      <span className="font-semibold">{day}</span>
+                      <span className="font-semibold">
+                        {day}
+                      </span>
+
                       {!isFuture && !isTodayAndBeforeCutoff && (
-                        <span className={`text-[9px] ${isSelected ? 'text-teal-100' : 'text-slate-400'}`}>
+                        <span
+                          className={`text-[9px] ${
+                            isSelected ? 'text-teal-100' : 'text-slate-400'
+                          }`}
+                        >
                           {presentCount}
                         </span>
                       )}
@@ -250,27 +459,39 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
             {selectedDate && (
               <div className="card animate-fade-in">
                 <p className="text-sm font-bold text-slate-900 mb-1">
-                  {new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', {
-                    weekday: 'long',
-                    month: 'long',
-                    day: 'numeric',
-                  })}
+                  {new Date(selectedDate + 'T00:00:00').toLocaleDateString(
+                    'en-US',
+                    {
+                      weekday: 'long',
+                      month: 'long',
+                      day: 'numeric',
+                    }
+                  )}
                 </p>
+
                 <p className="text-xs text-slate-500 mb-3">
                   {isMessLeaveDay(selectedDate) ? (
-                    <span className="font-medium text-rose-500">Mess closed — all students marked absent</span>
+                    <span className="font-medium text-rose-500">
+                      Mess closed — all students marked absent
+                    </span>
                   ) : (
-                    <>{selectedPresent.length} present, {selectedAbsent.length} absent</>
+                    <>
+                      {selectedPresent.length} present, {selectedAbsent.length} absent
+                    </>
                   )}
                 </p>
 
                 {/* Present list */}
                 <div className="space-y-2">
                   <p className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
-                    <CheckCircle2 size={14} /> Present ({selectedPresent.length})
+                    <CheckCircle2 size={14} />
+                    Present ({selectedPresent.length})
                   </p>
+
                   {selectedPresent.length === 0 ? (
-                    <p className="text-xs text-slate-400 py-2">No students present.</p>
+                    <p className="text-xs text-slate-400 py-2">
+                      No students present.
+                    </p>
                   ) : (
                     selectedPresent.map((s) => (
                       <div
@@ -278,9 +499,17 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
                         className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2"
                       >
                         <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-slate-800">{s.full_name}</p>
-                          {s.room_no && <p className="text-[11px] text-slate-500">Room {s.room_no}</p>}
+                          <p className="truncate text-sm font-medium text-slate-800">
+                            {s.full_name}
+                          </p>
+
+                          {s.room_no && (
+                            <p className="text-[11px] text-slate-500">
+                              Room {s.room_no}
+                            </p>
+                          )}
                         </div>
                       </div>
                     ))
@@ -291,17 +520,27 @@ export function EntriesPage({ onBack }: EntriesPageProps) {
                 {selectedAbsent.length > 0 && (
                   <div className="space-y-2 mt-3">
                     <p className="text-xs font-semibold text-rose-500 flex items-center gap-1">
-                      <XCircle size={14} /> Absent ({selectedAbsent.length})
+                      <XCircle size={14} />
+                      Absent ({selectedAbsent.length})
                     </p>
+
                     {selectedAbsent.map((s) => (
                       <div
                         key={s.id}
                         className="flex items-center gap-2 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2"
                       >
                         <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
+
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-slate-800">{s.full_name}</p>
-                          {s.room_no && <p className="text-[11px] text-slate-500">Room {s.room_no}</p>}
+                          <p className="truncate text-sm font-medium text-slate-800">
+                            {s.full_name}
+                          </p>
+
+                          {s.room_no && (
+                            <p className="text-[11px] text-slate-500">
+                              Room {s.room_no}
+                            </p>
+                          )}
                         </div>
                       </div>
                     ))}
