@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Receipt, CheckCircle2, Clock, Users, AlertCircle, Loader2, Download, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Receipt, CheckCircle2, Clock, Users, AlertCircle, Loader2, Download, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
 import type { Student, Hostel, Bill, Absence, MessLeave, ExpenseItem, ExpenseItemType } from '@/lib/supabase';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency, getDaysInMonth, getMonthName, formatMonthLabel, dateRange } from '@/lib/utils';
@@ -23,6 +23,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
   const [genResult, setGenResult] = useState<string | null>(null);
   const [updatingBillId, setUpdatingBillId] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const now = new Date();
   const [viewMonth, setViewMonth] = useState(now.getMonth());
@@ -41,6 +42,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       setViewMonth((m) => m - 1);
     }
   }
+
   function nextMonth() {
     if (viewMonth === 11) {
       setViewMonth(0);
@@ -61,6 +63,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
   const monthAbsences = absences.filter((a) => {
     return a.absent_date >= billingStart && a.absent_date <= monthEndStr;
   });
+
   const messLeaveDates = new Set<string>();
   for (const ml of messLeaves) {
     for (const d of dateRange(ml.start_date, ml.end_date)) {
@@ -69,6 +72,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       }
     }
   }
+
   const messLeaveDayCount = messLeaveDates.size;
   const totalPresentDays = students.length * BILLING_DAYS - monthAbsences.length - messLeaveDayCount * students.length;
   const monthExpenseItems = expenseItems.filter((item) => item.month === monthFirstStr);
@@ -101,6 +105,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     const roomPortion = Math.round(roomRentPerStudent * 100) / 100;
     const amount = Math.max(0, Math.round((messPortion + commonPortion + allowancePortion + roomPortion) * 100) / 100);
     const bill = currentMonthBills.find((b) => b.student_id === student.id);
+
     return {
       student,
       presentDays,
@@ -118,10 +123,10 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
   const totalCollected = currentMonthBills
     .filter((b) => b.status === 'paid')
     .reduce((sum, b) => sum + b.amount, 0);
+
   const totalPending = studentFeeStatus
     .filter((s) => s.status === 'unpaid')
     .reduce((sum, s) => sum + s.amount, 0);
-
 
   const billsByMonth: Record<string, Bill[]> = {};
   bills.forEach((b) => {
@@ -131,7 +136,6 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     }
   });
 
-  // For past months, the PDF should show saved bills for that month
   const viewedMonthBills = bills.filter((b) => b.month === monthFirstStr);
   const viewedMonthExpenses = expenseItems.filter((item) => item.month === monthFirstStr);
 
@@ -139,10 +143,12 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     setGenerating(true);
     setGenResult(null);
     setError(null);
+
     const { data, error: err } = await supabase.rpc('generate_monthly_bills', {
       p_hostel_id: hostel.id,
       p_month: monthFirstStr,
     });
+
     if (err) {
       setError(err.message);
     } else if (data?.error) {
@@ -153,26 +159,74 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       onDataChange();
       setTimeout(() => setGenResult(null), 5000);
     }
+
     setGenerating(false);
+  }
+
+  async function handleResetMonthlyBills() {
+    if (currentMonthBills.length === 0) {
+      setError('There are no generated bills to reset for this month.');
+      return;
+    }
+
+    const paidCount = currentMonthBills.filter((bill) => bill.status === 'paid').length;
+    const paidWarning = paidCount > 0
+      ? `\n\nWARNING: ${paidCount} bill(s) are marked as paid. Their bill/payment records will also be deleted.`
+      : '';
+
+    const confirmed = window.confirm(
+      `Reset all generated bills for ${getMonthName(month)} ${year}?\n\n` +
+      `${currentMonthBills.length} student bill(s) will be deleted.\n` +
+      `Monthly expense entries will remain, so you can correct them and generate bills again.` +
+      paidWarning +
+      `\n\nThis action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setResetting(true);
+    setError(null);
+    setGenResult(null);
+
+    const { data, error: resetError } = await supabase.rpc('reset_monthly_bills', {
+      p_hostel_id: hostel.id,
+      p_month: monthFirstStr,
+    });
+
+    if (resetError) {
+      setError(resetError.message);
+    } else if (data?.error) {
+      setError(data.error);
+    } else {
+      const deleted = data?.bills_deleted ?? currentMonthBills.length;
+      setGenResult(`Reset complete. ${deleted} bill(s) deleted for ${getMonthName(month)} ${year}. Expense entries were kept.`);
+      onDataChange();
+    }
+
+    setResetting(false);
   }
 
   async function toggleBillStatus(billId: string, currentStatus: string) {
     setUpdatingBillId(billId);
     const newStatus = currentStatus === 'paid' ? 'unpaid' : 'paid';
+
     const { error: err } = await supabase
       .from('bills')
       .update({ status: newStatus })
       .eq('id', billId);
+
     if (err) {
       setError(err.message);
     } else {
       onDataChange();
     }
+
     setUpdatingBillId(null);
   }
 
   async function createAndToggleBill(studentId: string, amount: number, presentDays: number) {
     setUpdatingBillId(studentId);
+
     const { error: err } = await supabase
       .from('bills')
       .insert({
@@ -183,11 +237,13 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
         amount,
         status: 'paid',
       });
+
     if (err) {
       setError(err.message);
     } else {
       onDataChange();
     }
+
     setUpdatingBillId(null);
   }
 
@@ -210,16 +266,18 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       import('jspdf'),
       import('jspdf-autotable'),
     ]);
+
     const autoTable = autoTableModule.default;
     const hasBreakdown = !!expenseBreakdown;
+
     const fmtPDF = (n: number) => {
       const formatted = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
       return 'Rs. ' + formatted;
     };
+
     const doc = new jsPDF({ orientation: hasBreakdown ? 'landscape' : 'portrait' });
     const pageWidth = doc.internal.pageSize.getWidth();
 
-    // Header
     doc.setFontSize(20);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(13, 148, 136);
@@ -239,16 +297,15 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     );
     doc.text(`Students: ${studentRows.length}`, pageWidth - 14, 28, { align: 'right' });
 
-    // Divider line
     doc.setDrawColor(13, 148, 136);
     doc.setLineWidth(0.8);
     doc.line(14, 35, pageWidth - 14, 35);
 
-    // Summary boxes
     const boxY = 42;
     const boxH = 22;
     const boxCount = hasBreakdown ? 4 : 3;
     const boxW = (pageWidth - 28 - (boxCount - 1) * 4) / boxCount;
+
     const labels = hasBreakdown
       ? [
           { label: 'Mess Bill', value: fmtPDF(expenseBreakdown!.mess), color: [13, 148, 136] as [number, number, number] },
@@ -261,6 +318,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
           { label: 'Collected', value: fmtPDF(totals.collected), color: [5, 150, 105] as [number, number, number] },
           { label: 'Pending', value: fmtPDF(totals.pending), color: [217, 119, 6] as [number, number, number] },
         ];
+
     labels.forEach((item, i) => {
       const x = 14 + i * (boxW + 4);
       doc.setFillColor(245, 250, 249);
@@ -277,11 +335,10 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
 
     let afterBoxesY = boxY + boxH + 8;
 
-    // Expense breakdown summary table (when breakdown available)
     if (hasBreakdown) {
       autoTable(doc, {
         startY: afterBoxesY,
-        head: [['Mess Bill', 'Common Bill', 'Allowance', 'Room Rent', 'Total'] ],
+        head: [['Mess Bill', 'Common Bill', 'Allowance', 'Room Rent', 'Total']],
         body: [[
           fmtPDF(expenseBreakdown!.mess),
           fmtPDF(expenseBreakdown!.common),
@@ -306,13 +363,14 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
         },
         margin: { left: 14, right: 14 },
       });
+
       afterBoxesY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
     }
 
-    // Student bills table
     const head = hasBreakdown
       ? ['#', 'Student Name', 'Days', 'Mess', 'Common', 'Allowance', 'Room', 'Total', 'Status']
       : ['#', 'Student Name', 'Present Days', 'Amount', 'Status'];
+
     const body = studentRows.map((s, i) =>
       hasBreakdown
         ? [
@@ -334,7 +392,9 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
             s.status === 'paid' ? 'Paid' : 'Unpaid',
           ],
     );
+
     const statusCol = hasBreakdown ? 8 : 4;
+
     autoTable(doc, {
       startY: afterBoxesY,
       head: [head],
@@ -381,7 +441,6 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       margin: { left: 14, right: 14 },
     });
 
-    // Footer
     const finalY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
@@ -400,6 +459,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
   async function handleDownloadPDF() {
     setDownloading(true);
     const monthLabel = `${getMonthName(month)} ${year}`;
+
     const pdfStudents = isCurrentMonth
       ? studentFeeStatus.map((s) => ({
           name: s.student.full_name,
@@ -445,6 +505,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       collected: pdfTotalCollected,
       pending: pdfTotalPending,
     }, breakdown);
+
     setDownloading(false);
   }
 
@@ -488,6 +549,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       collected: mTotalCollected,
       pending: mTotalPending,
     }, breakdown);
+
     setDownloading(false);
   }
 
@@ -523,6 +585,18 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
           <ChevronRight size={20} />
         </button>
       </div>
+
+      {/* Reset generated bills for the selected month */}
+      {currentMonthBills.length > 0 && (
+        <button
+          onClick={handleResetMonthlyBills}
+          disabled={resetting || generating}
+          className="w-full flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 hover:bg-rose-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {resetting ? <Loader2 size={17} className="animate-spin" /> : <Trash2 size={17} />}
+          {resetting ? 'Resetting fees...' : `Reset All Fees for ${getMonthName(month)} ${year}`}
+        </button>
+      )}
 
       {/* Billing calculation breakdown */}
       <div className="rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 p-5 text-white shadow-lg">
@@ -681,64 +755,64 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
           {studentFeeStatus.map((s) => {
             const bill = currentMonthBills.find((b) => b.student_id === s.student.id);
             return (
-            <div key={s.student.id} className="card">
-              <div className="flex items-center justify-between">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold text-slate-900">{s.student.full_name}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{s.presentDays} present days</p>
-                  <div className="mt-1.5 space-y-0.5">
-                    {s.messPortion > 0 && (
-                      <p className="text-[11px] text-slate-400">Mess: {formatCurrency(s.messPortion)}</p>
-                    )}
-                    {s.commonPortion > 0 && (
-                      <p className="text-[11px] text-slate-400">Common: {formatCurrency(s.commonPortion)}</p>
-                    )}
-                    {s.allowancePortion > 0 && (
-                      <p className="text-[11px] text-amber-600">Allowance: {formatCurrency(s.allowancePortion)}</p>
-                    )}
-                    {s.roomPortion > 0 && (
-                      <p className="text-[11px] text-slate-400">Room Rent: {formatCurrency(s.roomPortion)}</p>
+              <div key={s.student.id} className="card">
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-slate-900">{s.student.full_name}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{s.presentDays} present days</p>
+                    <div className="mt-1.5 space-y-0.5">
+                      {s.messPortion > 0 && (
+                        <p className="text-[11px] text-slate-400">Mess: {formatCurrency(s.messPortion)}</p>
+                      )}
+                      {s.commonPortion > 0 && (
+                        <p className="text-[11px] text-slate-400">Common: {formatCurrency(s.commonPortion)}</p>
+                      )}
+                      {s.allowancePortion > 0 && (
+                        <p className="text-[11px] text-amber-600">Allowance: {formatCurrency(s.allowancePortion)}</p>
+                      )}
+                      {s.roomPortion > 0 && (
+                        <p className="text-[11px] text-slate-400">Room Rent: {formatCurrency(s.roomPortion)}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-base font-bold text-slate-900">{formatCurrency(s.amount)}</p>
+                    {bill ? (
+                      <button
+                        onClick={() => toggleBillStatus(bill.id, s.status)}
+                        disabled={updatingBillId === bill.id}
+                        className={`mt-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                          s.status === 'paid'
+                            ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                            : 'bg-amber-50 text-amber-600 hover:bg-amber-100'
+                        }`}
+                      >
+                        {updatingBillId === bill.id ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : s.status === 'paid' ? (
+                          <CheckCircle2 size={12} />
+                        ) : (
+                          <Clock size={12} />
+                        )}
+                        {s.status === 'paid' ? 'Paid' : 'Pending'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => createAndToggleBill(s.student.id, s.amount, s.presentDays)}
+                        disabled={updatingBillId === s.student.id}
+                        className="mt-1 inline-flex items-center gap-1 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-100 px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-50"
+                      >
+                        {updatingBillId === s.student.id ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Clock size={12} />
+                        )}
+                        Pending
+                      </button>
                     )}
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-base font-bold text-slate-900">{formatCurrency(s.amount)}</p>
-                  {bill ? (
-                    <button
-                      onClick={() => toggleBillStatus(bill.id, s.status)}
-                      disabled={updatingBillId === bill.id}
-                      className={`mt-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                        s.status === 'paid'
-                          ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
-                          : 'bg-amber-50 text-amber-600 hover:bg-amber-100'
-                      }`}
-                    >
-                      {updatingBillId === bill.id ? (
-                        <Loader2 size={12} className="animate-spin" />
-                      ) : s.status === 'paid' ? (
-                        <CheckCircle2 size={12} />
-                      ) : (
-                        <Clock size={12} />
-                      )}
-                      {s.status === 'paid' ? 'Paid' : 'Pending'}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => createAndToggleBill(s.student.id, s.amount, s.presentDays)}
-                      disabled={updatingBillId === s.student.id}
-                      className="mt-1 inline-flex items-center gap-1 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-100 px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-50"
-                    >
-                      {updatingBillId === s.student.id ? (
-                        <Loader2 size={12} className="animate-spin" />
-                      ) : (
-                        <Clock size={12} />
-                      )}
-                      Pending
-                    </button>
-                  )}
-                </div>
               </div>
-            </div>
             );
           })}
         </div>
@@ -752,6 +826,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
           const monthBills = billsByMonth[monthKey];
           const monthCollected = monthBills.filter((b) => b.status === 'paid').reduce((sum, b) => sum + b.amount, 0);
           const monthPending = monthBills.filter((b) => b.status === 'unpaid').reduce((sum, b) => sum + b.amount, 0);
+
           return (
             <div key={monthKey} className="space-y-3">
               <div className="flex items-center justify-between">
@@ -765,6 +840,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
                   PDF
                 </button>
               </div>
+
               <div className="flex gap-2">
                 <div className="flex-1 rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2">
                   <p className="text-[11px] text-emerald-600 font-medium">Collected</p>
@@ -775,9 +851,11 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
                   <p className="text-sm font-bold text-amber-700">{formatCurrency(monthPending)}</p>
                 </div>
               </div>
+
               {monthBills.map((bill) => {
                 const student = students.find((s) => s.id === bill.student_id);
                 if (!student) return null;
+
                 return (
                   <div key={bill.id} className="card">
                     <div className="flex items-center justify-between">
