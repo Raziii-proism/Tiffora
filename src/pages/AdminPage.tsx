@@ -30,6 +30,7 @@ type Tab = 'hostels' | 'wardens' | 'students';
 type AdminCredentials = {
   email: string;
   password: string;
+  sessionToken: string;
 };
 
 type ManagedStudent = {
@@ -101,13 +102,14 @@ export function AdminPage({ onBack }: AdminPageProps) {
 
       const data = await response.json();
 
-      if (!response.ok || !data.authorized) {
+      if (!response.ok || !data.authorized || !data.token) {
         throw new Error(data.error || 'Invalid admin credentials');
       }
 
       setAdmin({
         email: loginEmail,
         password: loginPassword,
+        sessionToken: data.token,
       });
 
       setLoginEmail('');
@@ -220,7 +222,6 @@ export function AdminPage({ onBack }: AdminPageProps) {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       <div className="mx-auto w-full max-w-md flex-1 px-6 py-8">
-        {/* Header */}
         <div className="mb-6 flex items-start justify-between">
           <button
             onClick={onBack}
@@ -256,7 +257,6 @@ export function AdminPage({ onBack }: AdminPageProps) {
           </p>
         </div>
 
-        {/* Navigation tabs */}
         <div className="mb-6 flex gap-1 rounded-xl bg-slate-100 p-1">
           <button
             onClick={() => setTab('hostels')}
@@ -295,7 +295,6 @@ export function AdminPage({ onBack }: AdminPageProps) {
           </button>
         </div>
 
-        {/* Tab content */}
         {tab === 'hostels' ? (
           <HostelsTab
             admin={admin}
@@ -635,12 +634,9 @@ function StudentsTab({ admin }: { admin: AdminCredentials }) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        'X-Admin-Session': admin.sessionToken,
       },
-      body: JSON.stringify({
-        adminEmail: admin.email,
-        adminPassword: admin.password,
-        ...body,
-      }),
+      body: JSON.stringify(body),
     });
 
     const data = await response.json();
@@ -780,7 +776,6 @@ function StudentsTab({ admin }: { admin: AdminCredentials }) {
         </div>
       )}
 
-      {/* Search */}
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -810,7 +805,6 @@ function StudentsTab({ admin }: { admin: AdminCredentials }) {
         {filteredStudents.length} student(s)
       </div>
 
-      {/* Student list */}
       {loading ? (
         <div className="flex justify-center py-8">
           <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
