@@ -67,6 +67,16 @@ function generateTemporaryPassword() {
   return Array.from(bytes, (byte) => chars[byte % chars.length]).join("");
 }
 
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, ".")
+    .replace(/\.+/g, ".")
+    .replace(/^\.|\.$/g, "");
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -84,7 +94,8 @@ Deno.serve(async (req: Request) => {
       return response({ error: "Admin session expired. Please log in again." }, 403);
     }
 
-    const { action, studentId } = await req.json();
+    const body = await req.json();
+    const { action, studentId, email, password, fullName, hostelId, students } = body;
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -184,6 +195,151 @@ Deno.serve(async (req: Request) => {
         studentName: student.full_name,
         temporaryPassword,
       });
+    }
+
+    if (action === "create") {
+      if (
+        typeof email !== "string" ||
+        typeof password !== "string" ||
+        typeof fullName !== "string" ||
+        typeof hostelId !== "string" ||
+        !email.trim() ||
+        !password ||
+        !fullName.trim() ||
+        !hostelId
+      ) {
+        return response({ error: "Missing or invalid required fields." }, 400);
+      }
+
+      if (password.length < 6) {
+        return response({ error: "Password must be at least 6 characters." }, 400);
+      }
+
+      const { data: hostel, error: hostelError } = await adminClient
+        .from("hostels")
+        .select("id")
+        .eq("id", hostelId)
+        .maybeSingle();
+
+      if (hostelError || !hostel) {
+        return response({ error: "Selected hostel does not exist." }, 404);
+      }
+
+      const { data: authData, error: createError } =
+        await adminClient.auth.admin.createUser({
+          email: email.trim().toLowerCase(),
+          password,
+          email_confirm: true,
+        });
+
+      if (createError || !authData.user) {
+        return response(
+          { error: createError?.message || "Could not create student account." },
+          400
+        );
+      }
+
+      const studentUserId = authData.user.id;
+
+      const { error: insertError } = await adminClient
+        .from("students")
+        .insert({
+          id: studentUserId,
+          hostel_id: hostelId,
+          full_name: fullName.trim(),
+        });
+
+      if (insertError) {
+        const { error: rollbackError } =
+          await adminClient.auth.admin.deleteUser(studentUserId);
+
+        if (rollbackError) {
+          console.error("Rollback failed:", rollbackError.message);
+        }
+
+        return response({ error: insertError.message }, 400);
+      }
+
+      return response({
+        success: true,
+        message: "Student created successfully.",
+        studentId: studentUserId,
+      });
+    }
+
+    if (action === "bulk-create") {
+      if (!students || !Array.isArray(students) || !hostelId) {
+        return response({ error: "Missing required fields (hostelId, students array)." }, 400);
+      }
+
+      const { data: hostel, error: hostelError } = await adminClient
+        .from("hostels")
+        .select("id")
+        .eq("id", hostelId)
+        .maybeSingle();
+
+      if (hostelError || !hostel) {
+        return response({ error: "Selected hostel does not exist." }, 404);
+      }
+
+      const domain = "wisdomhomes.in";
+      const results: Array<{ name: string; email: string; password: string; status: string; error?: string }> = [];
+      const usedSlugs = new Set<string>();
+
+      const { data: existingUsers } = await adminClient.auth.admin.listUsers({
+        perPage: 1000,
+      });
+      const existingEmails = new Set(
+        (existingUsers?.users || []).map((u) => u.email?.toLowerCase() || "")
+      );
+
+      for (const rawName of students) {
+        const studentFullName = String(rawName).trim();
+        if (!studentFullName) continue;
+
+        let base = slugify(studentFullName);
+        if (!base) base = "student";
+
+        let slug = base;
+        let suffix = 1;
+        while (usedSlugs.has(slug) || existingEmails.has(`${slug}@${domain}`)) {
+          slug = `${base}${suffix}`;
+          suffix++;
+        }
+        usedSlugs.add(slug);
+
+        const studentEmail = `${slug}@${domain}`;
+        const studentPassword = "Wh@2026student!";
+
+        const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
+          email: studentEmail,
+          password: studentPassword,
+          email_confirm: true,
+        });
+
+        if (authError) {
+          results.push({ name: studentFullName, email: studentEmail, password: studentPassword, status: "failed", error: authError.message });
+          continue;
+        }
+
+        const studentUserId = authData.user.id;
+
+        const { error: insertError } = await adminClient.from("students").insert({
+          id: studentUserId,
+          hostel_id: hostelId,
+          full_name: studentFullName,
+        });
+
+        if (insertError) {
+          await adminClient.auth.admin.deleteUser(studentUserId);
+          results.push({ name: studentFullName, email: studentEmail, password: studentPassword, status: "failed", error: insertError.message });
+          continue;
+        }
+
+        results.push({ name: studentFullName, email: studentEmail, password: studentPassword, status: "created" });
+      }
+
+      return response({ success: true, results });
     }
 
     return response({ error: "Invalid action." }, 400);

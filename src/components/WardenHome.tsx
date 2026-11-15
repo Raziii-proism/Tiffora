@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Calculator, UserPlus, Users, ChevronRight, CalendarCheck, Clock, CalendarOff, Trash2, Loader2, UserCheck, Plus, Pencil } from 'lucide-react';
+import { Calculator, UserPlus, Users, ChevronRight, CalendarCheck, Clock, CalendarOff, Trash2, Loader2, UserCheck, Plus, Pencil, Copy } from 'lucide-react';
 import type { Hostel, Absence, MessLeave, ExpenseItem, ExpenseItemType } from '@/lib/supabase';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency, getDaysInMonth, getMonthName, formatDate } from '@/lib/utils';
 import { ErrorBanner } from '@/components/Feedback';
+import { CopyPreviousExpensesModal } from '@/components/CopyPreviousExpensesModal';
 
 type WardenHomeProps = {
   hostel: Hostel;
@@ -47,6 +48,11 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-01`;
   });
+  const [expenseMonth, setExpenseMonth] = useState<string>(() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-01`;
+  });
+  const [showCopyPrevModal, setShowCopyPrevModal] = useState(false);
 
   const [showLeave, setShowLeave] = useState(false);
   const [leaveStart, setLeaveStart] = useState('');
@@ -97,10 +103,33 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
   const prevMonth = month === 0 ? 11 : month - 1;
   const prevYear = month === 0 ? year - 1 : year;
   const prevMonthStr = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}-01`;
-  const canEditPreviousMonth = now.getDate() <= 5;
-  const currentMonthExpenses = expenseItems.filter((item) => item.month === selectedMonthStr);
+
   const [selYear, selMonthNum] = selectedMonthStr.split('-').map(Number);
-  const selMonthLabel = `${getMonthName(selMonthNum - 1)} ${selYear}`;
+  const selMonthIndex = selMonthNum - 1;
+  const selMonthLabel = `${getMonthName(selMonthIndex)} ${selYear}`;
+
+  const targetPrevMonthNum = selMonthNum === 1 ? 12 : selMonthNum - 1;
+  const targetPrevYear = selMonthNum === 1 ? selYear - 1 : selYear;
+  const targetPrevMonthStr = `${targetPrevYear}-${String(targetPrevMonthNum).padStart(2, '0')}-01`;
+  const targetPrevMonthLabel = `${getMonthName(targetPrevMonthNum - 1)} ${targetPrevYear}`;
+
+  const currentMonthExpenses = expenseItems.filter((item) => item.month === selectedMonthStr);
+  const prevMonthExpenses = expenseItems.filter((item) => item.month === targetPrevMonthStr);
+
+  const selDaysInMonth = getDaysInMonth(selYear, selMonthIndex);
+  const selMonthAbsences = absences.filter((a) => {
+    const d = new Date(a.absent_date + 'T00:00:00');
+    return d.getMonth() === selMonthIndex && d.getFullYear() === selYear;
+  });
+  const selTotalAbsentDays = selMonthAbsences.length;
+
+  const selMonthMessLeaveDays = Array.from(messLeaveDates).filter((d) => {
+    const dt = new Date(d + 'T00:00:00');
+    return dt.getMonth() === selMonthIndex && dt.getFullYear() === selYear;
+  }).length;
+
+  const selTotalPossibleDays = studentCount * selDaysInMonth;
+  const selTotalPresentDays = selTotalPossibleDays - selTotalAbsentDays - selMonthMessLeaveDays * studentCount;
 
   const expenseByType = currentMonthExpenses.reduce((acc, item) => {
     acc[item.type] = (acc[item.type] || 0) + item.amount;
@@ -113,7 +142,7 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
   const roomRentTotal = expenseByType.room_rent || 0;
 
   const totalExpenseNum = commonBillTotal + messBillTotal + allowanceTotal + roomRentTotal;
-  const messPerDayCost = totalPresentDays > 0 ? messBillTotal / totalPresentDays : 0;
+  const messPerDayCost = selTotalPresentDays > 0 ? messBillTotal / selTotalPresentDays : 0;
 
 
   function openAddExpense() {
@@ -121,6 +150,7 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
     setExpenseLabel('');
     setExpenseType('mess_bill');
     setExpenseAmount('');
+    setExpenseMonth(selectedMonthStr);
     setExpenseError(null);
     setShowExpenseForm(true);
   }
@@ -130,6 +160,7 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
     setExpenseLabel(item.label);
     setExpenseType(item.type);
     setExpenseAmount(String(item.amount));
+    setExpenseMonth(item.month || selectedMonthStr);
     setExpenseError(null);
     setShowExpenseForm(true);
   }
@@ -149,7 +180,7 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
     if (editingExpense) {
       const { error: err } = await supabase
         .from('expense_items')
-        .update({ label: expenseLabel.trim(), type: expenseType, amount: amountNum })
+        .update({ label: expenseLabel.trim(), type: expenseType, amount: amountNum, month: expenseMonth })
         .eq('id', editingExpense.id);
       if (err) {
         setExpenseError(err.message);
@@ -165,12 +196,14 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
         label: expenseLabel.trim(),
         type: expenseType,
         amount: amountNum,
-        month: selectedMonthStr,
+        month: expenseMonth,
       });
       if (err) {
         setExpenseError(err.message);
       } else {
-        setSuccess('Expense item added.');
+        const [eY, eM] = expenseMonth.split('-').map(Number);
+        setSuccess(`Expense item added for ${getMonthName(eM - 1)} ${eY}.`);
+        setSelectedMonthStr(expenseMonth);
         onDataChange();
         setTimeout(() => setSuccess(null), 3000);
         setShowExpenseForm(false);
@@ -285,28 +318,41 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
           </div>
         </div>
 
-        {canEditPreviousMonth && (
-          <div className="flex gap-2 mb-3">
-            <button
-              onClick={() => setSelectedMonthStr(prevMonthStr)}
-              className={`flex-1 rounded-xl border px-3 py-2 text-xs font-medium transition-all ${
-                selectedMonthStr === prevMonthStr
-                  ? 'border-teal-500 bg-teal-50 text-teal-700'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-              }`}
-            >
-              {getMonthName(prevMonth)} {prevYear}
-            </button>
-            <button
-              onClick={() => setSelectedMonthStr(currentMonthStr)}
-              className={`flex-1 rounded-xl border px-3 py-2 text-xs font-medium transition-all ${
-                selectedMonthStr === currentMonthStr
-                  ? 'border-teal-500 bg-teal-50 text-teal-700'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-              }`}
-            >
-              {getMonthName(month)} {year} (Current)
-            </button>
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => setSelectedMonthStr(prevMonthStr)}
+            className={`flex-1 rounded-xl border px-3 py-2 text-xs font-medium transition-all ${
+              selectedMonthStr === prevMonthStr
+                ? 'border-teal-500 bg-teal-50 text-teal-700 font-semibold ring-1 ring-teal-500'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+            }`}
+          >
+            {getMonthName(prevMonth)} {prevYear} (Previous)
+          </button>
+          <button
+            onClick={() => setSelectedMonthStr(currentMonthStr)}
+            className={`flex-1 rounded-xl border px-3 py-2 text-xs font-medium transition-all ${
+              selectedMonthStr === currentMonthStr
+                ? 'border-teal-500 bg-teal-50 text-teal-700 font-semibold ring-1 ring-teal-500'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+            }`}
+          >
+            {getMonthName(month)} {year} (Current)
+          </button>
+        </div>
+
+        {currentMonthExpenses.length === 0 && (
+          <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center mb-3">
+            <p className="text-xs text-slate-500">No expense items for {selMonthLabel} yet.</p>
+            {prevMonthExpenses.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowCopyPrevModal(true)}
+                className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-teal-600 hover:text-teal-700"
+              >
+                <Copy size={13} /> Add {prevMonthExpenses.length} item{prevMonthExpenses.length > 1 ? 's' : ''} from {targetPrevMonthLabel}
+              </button>
+            )}
           </div>
         )}
 
@@ -360,7 +406,7 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
             {allowanceTotal > 0 && (
               <div className="flex justify-between">
                 <span className="text-slate-500">Allowance (per day)</span>
-                <span className="font-semibold text-amber-600">{formatCurrency(Math.round(allowanceTotal / (totalPresentDays || 1)))}</span>
+                <span className="font-semibold text-amber-600">{formatCurrency(Math.round(allowanceTotal / (selTotalPresentDays || 1)))}</span>
               </div>
             )}
             {roomRentTotal > 0 && (
@@ -377,13 +423,67 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
         )}
 
         {!showExpenseForm ? (
-          <button onClick={openAddExpense} className="btn-primary w-full">
-            <span className="flex items-center justify-center gap-2">
-              <Plus size={18} /> Add Expense Item
-            </span>
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button onClick={openAddExpense} className="btn-primary flex-1">
+              <span className="flex items-center justify-center gap-2">
+                <Plus size={18} /> Add Expense Item
+              </span>
+            </button>
+            <button
+              onClick={() => setShowCopyPrevModal(true)}
+              className="btn-secondary flex items-center justify-center gap-1.5 py-2.5 px-3.5 text-xs font-semibold"
+            >
+              <Copy size={16} /> Add Previous Month Items
+            </button>
+          </div>
         ) : (
           <div className="space-y-3 animate-scale-in">
+            <div>
+              <label className="label-text">Billing Month</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExpenseMonth(prevMonthStr)}
+                  className={`rounded-xl border px-3 py-2 text-xs font-medium transition-all ${
+                    expenseMonth === prevMonthStr
+                      ? 'border-teal-500 bg-teal-50 text-teal-700 ring-1 ring-teal-500 font-semibold'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                  }`}
+                >
+                  {getMonthName(prevMonth)} {prevYear} (Previous)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExpenseMonth(currentMonthStr)}
+                  className={`rounded-xl border px-3 py-2 text-xs font-medium transition-all ${
+                    expenseMonth === currentMonthStr
+                      ? 'border-teal-500 bg-teal-50 text-teal-700 ring-1 ring-teal-500 font-semibold'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                  }`}
+                >
+                  {getMonthName(month)} {year} (Current)
+                </button>
+              </div>
+            </div>
+
+            {prevMonthExpenses.length > 0 && !editingExpense && (
+              <div className="flex items-center justify-between rounded-xl bg-teal-50/70 border border-teal-100 px-3 py-2 text-xs">
+                <span className="text-teal-800 font-medium">
+                  {prevMonthExpenses.length} item{prevMonthExpenses.length > 1 ? 's' : ''} in {targetPrevMonthLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExpenseForm(false);
+                    setShowCopyPrevModal(true);
+                  }}
+                  className="font-semibold text-teal-700 hover:text-teal-900 underline"
+                >
+                  Copy from {targetPrevMonthLabel}
+                </button>
+              </div>
+            )}
+
             <div>
               <label className="label-text">Type</label>
               <div className="grid grid-cols-2 gap-2">
@@ -576,6 +676,22 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
           <ChevronRight className="h-5 w-5 text-slate-300" />
         </div>
       </button>
+
+      {/* Copy Previous Month Expenses Modal */}
+      <CopyPreviousExpensesModal
+        isOpen={showCopyPrevModal}
+        onClose={() => setShowCopyPrevModal(false)}
+        onSuccess={(count) => {
+          setSuccess(`Added ${count} expense item${count > 1 ? 's' : ''} from ${targetPrevMonthLabel}.`);
+          onDataChange();
+          setTimeout(() => setSuccess(null), 3500);
+        }}
+        hostelId={hostel.id}
+        targetMonthStr={selectedMonthStr}
+        previousMonthStr={targetPrevMonthStr}
+        previousMonthItems={prevMonthExpenses}
+        onSwitchToPreviousMonth={() => setSelectedMonthStr(targetPrevMonthStr)}
+      />
     </div>
   );
 }

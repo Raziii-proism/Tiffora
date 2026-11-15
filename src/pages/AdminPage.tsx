@@ -16,10 +16,14 @@ import {
   Search,
   RefreshCw,
   Copy,
+  X,
+  XCircle,
+  Download,
 } from 'lucide-react';
 
 import { supabase, type Hostel } from '@/lib/supabase';
 import { ErrorBanner, EmptyState } from '@/components/Feedback';
+import { type BulkCreateStudentsResult } from '@/lib/students';
 
 type AdminPageProps = {
   onBack: () => void;
@@ -305,7 +309,7 @@ export function AdminPage({ onBack }: AdminPageProps) {
         ) : tab === 'wardens' ? (
           <WardensTab admin={admin} hostels={hostels} />
         ) : (
-          <StudentsTab admin={admin} />
+          <StudentsTab admin={admin} hostels={hostels} />
         )}
       </div>
     </div>
@@ -615,10 +619,18 @@ function WardensTab({
    STUDENTS TAB
 ===================================================== */
 
-function StudentsTab({ admin }: { admin: AdminCredentials }) {
+function StudentsTab({
+  admin,
+  hostels,
+}: {
+  admin: AdminCredentials;
+  hostels: Hostel[];
+}) {
   const [students, setStudents] = useState<ManagedStudent[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [showBulkAdd, setShowBulkAdd] = useState(false);
   const [resettingId, setResettingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -718,14 +730,31 @@ function StudentsTab({ admin }: { admin: AdminCredentials }) {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-base font-bold text-slate-900">
-          Student Password Management
-        </h2>
-
-        <p className="mt-1 text-xs text-slate-500">
-          View student accounts and generate temporary passwords.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-bold text-slate-900">
+            Student Management
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Manage student accounts and generate temporary passwords.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowBulkAdd(true)}
+            className="btn-secondary flex items-center gap-1.5 text-xs py-2 px-3"
+          >
+            <Users size={14} /> Bulk Add
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowAdd(true)}
+            className="btn-primary flex items-center gap-1.5 text-xs py-2 px-3"
+          >
+            <UserPlus size={14} /> Add Student
+          </button>
+        </div>
       </div>
 
       {success && (
@@ -864,6 +893,380 @@ function StudentsTab({ admin }: { admin: AdminCredentials }) {
           ))}
         </div>
       )}
+
+      {showAdd && (
+        <AddStudentModal
+          hostels={hostels}
+          callAdminFunction={callAdminFunction}
+          onClose={() => setShowAdd(false)}
+          onSuccess={() => {
+            setShowAdd(false);
+            loadStudents();
+          }}
+        />
+      )}
+
+      {showBulkAdd && (
+        <BulkAddStudentsModal
+          hostels={hostels}
+          callAdminFunction={callAdminFunction}
+          onClose={() => setShowBulkAdd(false)}
+          onSuccess={() => {
+            setShowBulkAdd(false);
+            loadStudents();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function downloadCSV(results: BulkCreateStudentsResult[]) {
+  const rows = [
+    ['Name', 'Email', 'Password', 'Status'],
+    ...results.map((r) => [r.name, r.email, r.password, r.status]),
+  ];
+  const csv = rows.map((r) => r.map((c) => `"${c}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'student-credentials.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function AddStudentModal({
+  hostels,
+  callAdminFunction,
+  onClose,
+  onSuccess,
+}: {
+  hostels: Hostel[];
+  callAdminFunction: (body: Record<string, unknown>) => Promise<{ studentId?: string }>;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [hostelId, setHostelId] = useState(hostels[0]?.id || '');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!hostelId) {
+      setError('Please select a hostel.');
+      return;
+    }
+    setError(null);
+    setLoading(true);
+
+    try {
+      await callAdminFunction({
+        action: 'create',
+        hostelId,
+        fullName,
+        email,
+        password,
+      });
+
+      onSuccess();
+      onClose();
+    } catch (err) {
+      console.error('Create student error:', err);
+      setError(err instanceof Error ? err.message : 'Something went wrong');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm animate-fade-in">
+      <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 max-h-[90vh] overflow-y-auto animate-slide-up">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-slate-900">Add Student</h3>
+          <button onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-xl hover:bg-slate-100">
+            <X size={20} className="text-slate-500" />
+          </button>
+        </div>
+
+        {hostels.length === 0 ? (
+          <EmptyState
+            icon={Building2}
+            title="Add a hostel first"
+            description="You need at least one hostel before adding students. Switch to the Hostels tab."
+          />
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <div>
+              <label className="label-text">Hostel</label>
+              <select
+                value={hostelId}
+                onChange={(e) => setHostelId(e.target.value)}
+                className="input-field"
+                required
+              >
+                <option value="" disabled>Select a hostel</option>
+                {hostels.map((h) => (
+                  <option key={h.id} value={h.id}>{h.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="label-text">Full Name</label>
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Student name"
+                className="input-field"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="label-text">Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="student@example.com"
+                className="input-field"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="label-text">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Temporary password"
+                className="input-field"
+                required
+                minLength={6}
+              />
+            </div>
+
+            {error && <ErrorBanner message={error} />}
+
+            <button type="submit" disabled={loading} className="btn-primary w-full">
+              {loading ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" /> Creating...
+                </>
+              ) : (
+                'Create Student Account'
+              )}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BulkAddStudentsModal({
+  hostels,
+  callAdminFunction,
+  onClose,
+  onSuccess,
+}: {
+  hostels: Hostel[];
+  callAdminFunction: (body: Record<string, unknown>) => Promise<{ results?: BulkCreateStudentsResult[] }>;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [hostelId, setHostelId] = useState(hostels[0]?.id || '');
+  const [namesText, setNamesText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<BulkCreateStudentsResult[] | null>(null);
+  const [showAll, setShowAll] = useState(false);
+
+  const created = results?.filter((r) => r.status === 'created') ?? [];
+  const failed = results?.filter((r) => r.status === 'failed') ?? [];
+  const displayResults = showAll ? (results ?? []) : (results ?? []).slice(0, 10);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!hostelId) {
+      setError('Please select a hostel.');
+      return;
+    }
+    setError(null);
+
+    const names = namesText
+      .split('\n')
+      .map((n) => n.trim())
+      .filter(Boolean);
+
+    if (names.length === 0) {
+      setError('Please enter at least one name.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await callAdminFunction({
+        action: 'bulk-create',
+        hostelId,
+        students: names,
+      });
+      setResults(res.results || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm animate-fade-in">
+      <div className="w-full max-w-lg rounded-t-3xl sm:rounded-3xl bg-white p-6 max-h-[92vh] overflow-y-auto animate-slide-up">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-slate-900">Bulk Add Students</h3>
+          <button onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-xl hover:bg-slate-100">
+            <X size={20} className="text-slate-500" />
+          </button>
+        </div>
+
+        {hostels.length === 0 ? (
+          <EmptyState
+            icon={Building2}
+            title="Add a hostel first"
+            description="You need at least one hostel before adding students. Switch to the Hostels tab."
+          />
+        ) : !results ? (
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <p className="text-sm text-slate-500">
+              Paste one student name per line. Emails and a common password will be auto-generated.
+            </p>
+
+            <div>
+              <label className="label-text">Hostel</label>
+              <select
+                value={hostelId}
+                onChange={(e) => setHostelId(e.target.value)}
+                className="input-field"
+                required
+              >
+                <option value="" disabled>Select a hostel</option>
+                {hostels.map((h) => (
+                  <option key={h.id} value={h.id}>{h.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="label-text">Student Names (one per line)</label>
+              <textarea
+                value={namesText}
+                onChange={(e) => setNamesText(e.target.value)}
+                placeholder={'FARIS MUHAMMED PS\nJINSHAD M\n...'}
+                rows={10}
+                className="input-field font-mono text-sm resize-y"
+                required
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                {namesText.split('\n').filter((n) => n.trim()).length} name(s) entered
+              </p>
+            </div>
+
+            {error && <ErrorBanner message={error} />}
+
+            <button type="submit" disabled={loading} className="btn-primary w-full">
+              {loading ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" /> Creating accounts…
+                </>
+              ) : (
+                'Create All Accounts'
+              )}
+            </button>
+          </form>
+        ) : (
+          <div className="space-y-4">
+            {/* Summary */}
+            <div className="flex gap-3">
+              <div className="flex-1 rounded-2xl bg-teal-50 border border-teal-100 p-3 text-center">
+                <p className="text-2xl font-bold text-teal-700">{created.length}</p>
+                <p className="text-xs text-teal-600 font-medium">Created</p>
+              </div>
+              {failed.length > 0 && (
+                <div className="flex-1 rounded-2xl bg-red-50 border border-red-100 p-3 text-center">
+                  <p className="text-2xl font-bold text-red-600">{failed.length}</p>
+                  <p className="text-xs text-red-500 font-medium">Failed</p>
+                </div>
+              )}
+            </div>
+
+            {/* Download button */}
+            {created.length > 0 && (
+              <button
+                type="button"
+                onClick={() => downloadCSV(results)}
+                className="btn-secondary w-full flex items-center justify-center gap-2"
+              >
+                <Download size={15} /> Download Credentials CSV
+              </button>
+            )}
+
+            {/* Results list */}
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {displayResults.map((r, i) => (
+                <div
+                  key={i}
+                  className={`flex items-start gap-3 rounded-xl p-3 text-sm ${
+                    r.status === 'created'
+                      ? 'bg-teal-50 border border-teal-100'
+                      : 'bg-red-50 border border-red-100'
+                  }`}
+                >
+                  {r.status === 'created' ? (
+                    <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-teal-600" />
+                  ) : (
+                    <XCircle size={16} className="mt-0.5 shrink-0 text-red-500" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-800 truncate">{r.name}</p>
+                    <p className="text-slate-500 truncate">{r.email}</p>
+                    {r.status === 'created' && (
+                      <p className="text-slate-400 text-xs">Password: {r.password}</p>
+                    )}
+                    {r.error && <p className="text-red-500 text-xs">{r.error}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {(results ?? []).length > 10 && (
+              <button
+                type="button"
+                onClick={() => setShowAll((v) => !v)}
+                className="text-sm text-teal-600 font-medium hover:underline w-full text-center"
+              >
+                {showAll ? 'Show less' : `Show all ${results?.length} results`}
+              </button>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={onClose} className="btn-secondary flex-1">
+                Close
+              </button>
+              {created.length > 0 && (
+                <button type="button" onClick={onSuccess} className="btn-primary flex-1">
+                  Done
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
