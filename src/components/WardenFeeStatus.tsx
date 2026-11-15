@@ -32,7 +32,6 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
   const isPreviousMonth =
     (viewYear === now.getFullYear() && viewMonth === now.getMonth() - 1) ||
     (now.getMonth() === 0 && viewMonth === 11 && viewYear === now.getFullYear() - 1);
-  const canGeneratePreviousMonth = now.getDate() <= 5;
 
   function prevMonth() {
     if (viewMonth === 0) {
@@ -175,7 +174,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       : '';
 
     const confirmed = window.confirm(
-      `Reset all generated bills for ${getMonthName(month)} ${year}?\n\n` +
+      `Clear all generated bills for ${getMonthName(month)} ${year}?\n\n` +
       `${currentMonthBills.length} student bill(s) will be deleted.\n` +
       `Monthly expense entries will remain, so you can correct them and generate bills again.` +
       paidWarning +
@@ -194,13 +193,27 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     });
 
     if (resetError) {
-      setError(resetError.message);
+      // Fallback: delete bills directly for this month and hostel
+      const { error: delErr } = await supabase
+        .from('bills')
+        .delete()
+        .eq('hostel_id', hostel.id)
+        .eq('month', monthFirstStr);
+
+      if (delErr) {
+        setError(delErr.message);
+      } else {
+        setGenResult(`Clear complete. ${currentMonthBills.length} bill(s) cleared for ${getMonthName(month)} ${year}. Expense entries were kept.`);
+        onDataChange();
+        setTimeout(() => setGenResult(null), 5000);
+      }
     } else if (data?.error) {
       setError(data.error);
     } else {
       const deleted = data?.bills_deleted ?? currentMonthBills.length;
-      setGenResult(`Reset complete. ${deleted} bill(s) deleted for ${getMonthName(month)} ${year}. Expense entries were kept.`);
+      setGenResult(`Clear complete. ${deleted} bill(s) deleted for ${getMonthName(month)} ${year}. Expense entries were kept.`);
       onDataChange();
+      setTimeout(() => setGenResult(null), 5000);
     }
 
     setResetting(false);
@@ -460,18 +473,8 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     setDownloading(true);
     const monthLabel = `${getMonthName(month)} ${year}`;
 
-    const pdfStudents = isCurrentMonth
-      ? studentFeeStatus.map((s) => ({
-          name: s.student.full_name,
-          presentDays: s.presentDays,
-          amount: s.amount,
-          status: s.status,
-          mess: s.messPortion,
-          common: s.commonPortion,
-          allowance: s.allowancePortion,
-          room: s.roomPortion,
-        }))
-      : viewedMonthBills.map((bill) => {
+    const pdfStudents = viewedMonthBills.length > 0
+      ? viewedMonthBills.map((bill) => {
           const student = students.find((s) => s.id === bill.student_id);
           return {
             name: student?.full_name || 'Unknown',
@@ -483,21 +486,37 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
             allowance: bill.allowance_amount || 0,
             room: bill.room_rent_amount || 0,
           };
-        });
+        })
+      : studentFeeStatus.map((s) => ({
+          name: s.student.full_name,
+          presentDays: s.presentDays,
+          amount: s.amount,
+          status: s.status,
+          mess: s.messPortion,
+          common: s.commonPortion,
+          allowance: s.allowancePortion,
+          room: s.roomPortion,
+        }));
 
-    const pdfTotalExpense = isCurrentMonth ? totalExpense : viewedMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
-    const pdfTotalCollected = viewedMonthBills.filter((b) => b.status === 'paid').reduce((sum, b) => sum + b.amount, 0);
-    const pdfTotalPending = viewedMonthBills.filter((b) => b.status === 'unpaid').reduce((sum, b) => sum + b.amount, 0);
+    const pdfTotalExpense = viewedMonthBills.length > 0
+      ? viewedMonthBills.reduce((sum, b) => sum + b.amount, 0)
+      : (totalExpense > 0 ? totalExpense : viewedMonthExpenses.reduce((sum, e) => sum + e.amount, 0));
+    const pdfTotalCollected = viewedMonthBills.length > 0
+      ? viewedMonthBills.filter((b) => b.status === 'paid').reduce((sum, b) => sum + b.amount, 0)
+      : totalCollected;
+    const pdfTotalPending = viewedMonthBills.length > 0
+      ? viewedMonthBills.filter((b) => b.status === 'unpaid').reduce((sum, b) => sum + b.amount, 0)
+      : totalPending;
 
-    const breakdown = isCurrentMonth
-      ? { mess: messBillTotal, common: commonBillTotal, allowance: allowanceTotal, room: roomRentTotal }
-      : viewedMonthBills.length > 0
+    const breakdown = viewedMonthBills.length > 0
       ? {
           mess: viewedMonthBills.reduce((sum, b) => sum + (b.mess_amount || 0), 0),
           common: viewedMonthBills.reduce((sum, b) => sum + (b.common_amount || 0), 0),
           allowance: viewedMonthBills.reduce((sum, b) => sum + (b.allowance_amount || 0), 0),
           room: viewedMonthBills.reduce((sum, b) => sum + (b.room_rent_amount || 0), 0),
         }
+      : totalExpense > 0
+      ? { mess: messBillTotal, common: commonBillTotal, allowance: allowanceTotal, room: roomRentTotal }
       : undefined;
 
     await generateBillPDF(monthLabel, pdfStudents, {
@@ -594,7 +613,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
           className="w-full flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 hover:bg-rose-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {resetting ? <Loader2 size={17} className="animate-spin" /> : <Trash2 size={17} />}
-          {resetting ? 'Resetting fees...' : `Reset All Fees for ${getMonthName(month)} ${year}`}
+          {resetting ? 'Clearing bills...' : `Clear All Bills for ${getMonthName(month)} ${year}`}
         </button>
       )}
 
@@ -687,63 +706,54 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
         </div>
       </div>
 
-      {/* Billing period info — only for current month */}
-      {isCurrentMonth && (
-        <div className="card">
+      {/* Billing period info */}
+      <div className="card">
+        <div className="flex items-center justify-between">
           <p className="text-sm font-bold text-slate-900">Billing Period</p>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Every bill covers {BILLING_DAYS} days, from {billingStart} to {monthEndStr}.
-          </p>
-        </div>
-      )}
-
-      {/* Generate bills + Download PDF buttons — only for current month */}
-      {isCurrentMonth && (
-        <>
-          <div className="flex gap-3">
-            <button
-              onClick={handleGenerateBills}
-              disabled={generating || totalExpense <= 0 || students.length === 0}
-              className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <span className="flex items-center justify-center gap-2">
-                {generating ? <Loader2 size={18} className="animate-spin" /> : <Receipt size={18} />}
-                {generating ? 'Generating...' : 'Generate Bills'}
-              </span>
-            </button>
-            <button
-              onClick={handleDownloadPDF}
-              disabled={downloading || students.length === 0 || totalExpense <= 0}
-              className="btn-secondary px-4 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <span className="flex items-center justify-center gap-2">
-                {downloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-                <span className="hidden sm:inline">PDF</span>
-              </span>
-            </button>
-          </div>
-          {totalExpense <= 0 && students.length > 0 && (
-            <p className="text-xs text-amber-600 text-center -mt-2">
-              {isPreviousMonth
-                ? `Add expense items for ${getMonthName(month)} ${year} on the Home tab first.`
-                : 'Add expense items on the Home tab first.'}
-            </p>
+          {isCurrentMonth ? (
+            <span className="text-[11px] font-semibold text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200">
+              Current Month
+            </span>
+          ) : (
+            <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
+              {getMonthName(month)} {year}
+            </span>
           )}
-        </>
-      )}
+        </div>
+        <p className="text-xs text-slate-500 mt-0.5">
+          Every bill covers {BILLING_DAYS} days, from {billingStart} to {monthEndStr}.
+        </p>
+      </div>
 
-      {/* Download PDF button for past months viewed via month navigation */}
-      {!isCurrentMonth && viewedMonthBills.length > 0 && (
+      {/* Generate bills + Download PDF buttons (available for all months) */}
+      <div className="flex gap-3">
+        <button
+          onClick={handleGenerateBills}
+          disabled={generating || totalExpense <= 0 || students.length === 0}
+          className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <span className="flex items-center justify-center gap-2">
+            {generating ? <Loader2 size={18} className="animate-spin" /> : <Receipt size={18} />}
+            {generating ? 'Generating...' : `Generate Bills (${getMonthName(month)})`}
+          </span>
+        </button>
         <button
           onClick={handleDownloadPDF}
-          disabled={downloading}
-          className="btn-secondary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={downloading || students.length === 0 || (totalExpense <= 0 && viewedMonthBills.length === 0)}
+          className="btn-secondary px-4 disabled:opacity-50 disabled:cursor-not-allowed"
+          title={`Download PDF for ${getMonthName(month)} ${year}`}
         >
           <span className="flex items-center justify-center gap-2">
             {downloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-            Download PDF for {getMonthName(month)} {year}
+            <span className="hidden sm:inline">PDF</span>
           </span>
         </button>
+      </div>
+
+      {totalExpense <= 0 && viewedMonthBills.length === 0 && students.length > 0 && (
+        <p className="text-xs text-amber-600 text-center -mt-2">
+          {`Add expense items for ${getMonthName(month)} ${year} on the Home tab first.`}
+        </p>
       )}
 
       {/* Current month student fees */}
