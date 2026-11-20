@@ -28,8 +28,8 @@ function BillBreakdownCard({ bill, variant }: { bill: Bill; variant: 'current' |
   const hasBreakdown = (bill.mess_amount || 0) > 0 || (bill.common_amount || 0) > 0 || (bill.allowance_amount || 0) > 0 || (bill.room_rent_amount || 0) > 0;
   const presentDays = bill.present_days;
 
-  const messPerDay = presentDays > 0 ? (bill.mess_amount || 0) / presentDays : 0;
-  const allowancePerDay = presentDays > 0 ? (bill.allowance_amount || 0) / presentDays : 0;
+  const messPerDay = presentDays > 0 ? Math.ceil((bill.mess_amount || 0) / presentDays) : 0;
+  const allowancePerDay = presentDays > 0 ? Math.ceil((bill.allowance_amount || 0) / presentDays) : 0;
 
   const cardClass = variant === 'current'
     ? 'rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-700 p-5 text-white shadow-lg shadow-teal-600/20'

@@ -251,7 +251,7 @@ function StudentDetailModal({
   const absenceDates = new Set(monthAbsences.map((a) => a.absent_date));
   const daysInMonth = getDaysInMonth(calYear, calMonth);
   const presentDays = daysInMonth - monthAbsences.length - monthMessLeaveDays;
-  const estimatedBill = presentDays * (hostel.daily_cost || 0);
+  const estimatedBill = Math.ceil(presentDays * (hostel.daily_cost || 0));
   const today = todayString();
 
   const firstDay = new Date(calYear, calMonth, 1).getDay();

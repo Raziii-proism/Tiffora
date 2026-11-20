@@ -142,7 +142,7 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
   const roomRentTotal = expenseByType.room_rent || 0;
 
   const totalExpenseNum = commonBillTotal + messBillTotal + allowanceTotal + roomRentTotal;
-  const messPerDayCost = selTotalPresentDays > 0 ? messBillTotal / selTotalPresentDays : 0;
+  const messPerDayCost = selTotalPresentDays > 0 ? Math.ceil(messBillTotal / selTotalPresentDays) : 0;
 
 
   function openAddExpense() {
@@ -394,25 +394,25 @@ export function WardenHome({ hostel, studentCount, absences, messLeaves, expense
             {messBillTotal > 0 && (
               <div className="flex justify-between">
                 <span className="text-slate-500">Mess bill (per day)</span>
-                <span className="font-semibold text-slate-900">{formatCurrency(Math.round(messPerDayCost))}</span>
+                <span className="font-semibold text-slate-900">{formatCurrency(Math.ceil(messPerDayCost))}</span>
               </div>
             )}
             {commonBillTotal > 0 && (
               <div className="flex justify-between">
                 <span className="text-slate-500">Common bill (per student)</span>
-                <span className="font-semibold text-slate-900">{formatCurrency(Math.round(commonBillTotal / studentCount))}</span>
+                <span className="font-semibold text-slate-900">{formatCurrency(Math.ceil(commonBillTotal / studentCount))}</span>
               </div>
             )}
             {allowanceTotal > 0 && (
               <div className="flex justify-between">
                 <span className="text-slate-500">Allowance (per day)</span>
-                <span className="font-semibold text-amber-600">{formatCurrency(Math.round(allowanceTotal / (selTotalPresentDays || 1)))}</span>
+                <span className="font-semibold text-amber-600">{formatCurrency(Math.ceil(allowanceTotal / (selTotalPresentDays || 1)))}</span>
               </div>
             )}
             {roomRentTotal > 0 && (
               <div className="flex justify-between">
                 <span className="text-slate-500">Room rent (per student)</span>
-                <span className="font-semibold text-slate-900">{formatCurrency(Math.round(roomRentTotal))}</span>
+                <span className="font-semibold text-slate-900">{formatCurrency(Math.ceil(roomRentTotal))}</span>
               </div>
             )}
             <div className="border-t border-slate-200 mt-1 pt-1 flex justify-between">

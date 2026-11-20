@@ -19,6 +19,7 @@ import {
   X,
   XCircle,
   Download,
+  AlertTriangle,
 } from 'lucide-react';
 
 import { supabase, type Hostel } from '@/lib/supabase';
@@ -335,6 +336,8 @@ function HostelsTab({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [deletingHostelId, setDeletingHostelId] = useState<string | null>(null);
+  const [deleteConfirmHostel, setDeleteConfirmHostel] = useState<Hostel | null>(null);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -375,6 +378,64 @@ function HostelsTab({
       setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDeleteHostel(hostel: Hostel) {
+    setDeletingHostelId(hostel.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      let deleteSuccess = false;
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+
+      // 1. Try edge function first
+      try {
+        const response = await fetch(`${supabaseUrl}/functions/v1/delete-hostel`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            adminEmail: admin.email,
+            adminPassword: admin.password,
+            hostelId: hostel.id,
+          }),
+        });
+
+        if (response.ok) {
+          deleteSuccess = true;
+        } else if (response.status !== 404) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to delete hostel');
+        }
+      } catch (edgeErr) {
+        if ((edgeErr as Error).message && !(edgeErr as Error).message.includes('404')) {
+          throw edgeErr;
+        }
+      }
+
+      // 2. Fall back to database RPC function if edge function is unavailable
+      if (!deleteSuccess) {
+        const { data, error: rpcErr } = await supabase.rpc('admin_delete_hostel', {
+          p_hostel_id: hostel.id,
+          p_admin_email: admin.email,
+          p_admin_password: admin.password,
+        });
+
+        if (rpcErr) throw new Error(rpcErr.message);
+        if (data?.error) throw new Error(data.error);
+      }
+
+      setSuccess(`Hostel "${hostel.name}" was deleted successfully.`);
+      setDeleteConfirmHostel(null);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete hostel');
+    } finally {
+      setDeletingHostelId(null);
     }
   }
 
@@ -452,12 +513,67 @@ function HostelsTab({
                   {hostel.name}
                 </span>
 
-                <Trash2 className="h-4 w-4 text-slate-300" />
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmHostel(hostel)}
+                  disabled={deletingHostelId === hostel.id}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors disabled:opacity-50"
+                  title={`Delete ${hostel.name}`}
+                >
+                  {deletingHostelId === hostel.id ? (
+                    <Loader2 size={16} className="animate-spin text-rose-500" />
+                  ) : (
+                    <Trash2 size={16} />
+                  )}
+                </button>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {deleteConfirmHostel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl animate-scale-up space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                <AlertTriangle size={20} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900">Delete Hostel?</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Are you sure you want to delete <span className="font-semibold text-slate-700">{deleteConfirmHostel.name}</span>? This will permanently remove the hostel along with all associated wardens, students, and attendance records.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmHostel(null)}
+                disabled={deletingHostelId !== null}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteHostel(deleteConfirmHostel)}
+                disabled={deletingHostelId !== null}
+                className="btn-primary flex-1 bg-rose-600 hover:bg-rose-700 border-rose-600 focus:ring-rose-500"
+              >
+                {deletingHostelId ? (
+                  <span className="flex items-center justify-center gap-1.5">
+                    <Loader2 size={14} className="animate-spin" /> Deleting...
+                  </span>
+                ) : (
+                  'Delete'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

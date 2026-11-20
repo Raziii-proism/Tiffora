@@ -86,10 +86,10 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
   const roomRentTotal = expenseByType.room_rent || 0;
 
   const studentCount = students.length;
-  const commonBillPerStudent = studentCount > 0 ? commonBillTotal / studentCount : 0;
-  const messPerDayCost = totalPresentDays > 0 ? messBillTotal / totalPresentDays : 0;
-  const allowancePerStudent = allowanceTotal;
-  const roomRentPerStudent = roomRentTotal;
+  const commonBillPerStudent = studentCount > 0 ? Math.ceil(commonBillTotal / studentCount) : 0;
+  const messPerDayCost = totalPresentDays > 0 ? Math.ceil(messBillTotal / totalPresentDays) : 0;
+  const allowancePerStudent = Math.ceil(allowanceTotal);
+  const roomRentPerStudent = Math.ceil(roomRentTotal);
 
   const totalExpense = commonBillTotal + messBillTotal + allowanceTotal + roomRentTotal;
 
@@ -98,11 +98,11 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
   const studentFeeStatus = students.map((student) => {
     const studentAbsences = monthAbsences.filter((a) => a.student_id === student.id).length;
     const presentDays = BILLING_DAYS - studentAbsences - messLeaveDayCount;
-    const messPortion = Math.round(messPerDayCost * presentDays * 100) / 100;
-    const commonPortion = Math.round(commonBillPerStudent * 100) / 100;
-    const allowancePortion = Math.round(allowancePerStudent * 100) / 100;
-    const roomPortion = Math.round(roomRentPerStudent * 100) / 100;
-    const amount = Math.max(0, Math.round((messPortion + commonPortion + allowancePortion + roomPortion) * 100) / 100);
+    const messPortion = Math.ceil(messPerDayCost * presentDays);
+    const commonPortion = Math.ceil(commonBillPerStudent);
+    const allowancePortion = Math.ceil(allowancePerStudent);
+    const roomPortion = Math.ceil(roomRentPerStudent);
+    const amount = Math.max(0, Math.ceil(messPortion + commonPortion + allowancePortion + roomPortion));
     const bill = currentMonthBills.find((b) => b.student_id === student.id);
 
     return {
@@ -113,7 +113,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       commonPortion,
       allowancePortion,
       roomPortion,
-      amount: bill ? bill.amount : amount,
+      amount: bill ? Math.ceil(bill.amount) : amount,
       status: bill?.status || 'unpaid',
       hasBill: !!bill,
     };
@@ -247,7 +247,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
         hostel_id: hostel.id,
         month: monthFirstStr,
         present_days: presentDays,
-        amount,
+        amount: Math.ceil(amount),
         status: 'paid',
       });
 
@@ -284,7 +284,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     const hasBreakdown = !!expenseBreakdown;
 
     const fmtPDF = (n: number) => {
-      const formatted = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+      const formatted = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.ceil(n));
       return 'Rs. ' + formatted;
     };
 
