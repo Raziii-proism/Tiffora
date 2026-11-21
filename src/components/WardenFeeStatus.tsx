@@ -98,12 +98,24 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
   const studentFeeStatus = students.map((student) => {
     const studentAbsences = monthAbsences.filter((a) => a.student_id === student.id).length;
     const presentDays = BILLING_DAYS - studentAbsences - messLeaveDayCount;
-    const messPortion = Math.ceil(messPerDayCost * presentDays);
-    const commonPortion = Math.ceil(commonBillPerStudent);
-    const allowancePortion = Math.ceil(allowancePerStudent);
-    const roomPortion = Math.ceil(roomRentPerStudent);
-    const amount = Math.max(0, Math.ceil(messPortion + commonPortion + allowancePortion + roomPortion));
     const bill = currentMonthBills.find((b) => b.student_id === student.id);
+    // When a generated bill exists, use its stored breakdown so the
+    // displayed line items always add up to the displayed total.
+    const messPortion = (bill && bill.mess_amount != null)
+      ? Math.ceil(bill.mess_amount)
+      : Math.ceil(messPerDayCost * presentDays);
+    const commonPortion = (bill && bill.common_amount != null)
+      ? Math.ceil(bill.common_amount)
+      : Math.ceil(commonBillPerStudent);
+    const allowancePortion = (bill && bill.allowance_amount != null)
+      ? Math.ceil(bill.allowance_amount)
+      : Math.ceil(allowancePerStudent);
+    const roomPortion = (bill && bill.room_rent_amount != null)
+      ? Math.ceil(bill.room_rent_amount)
+      : Math.ceil(roomRentPerStudent);
+    const amount = bill
+      ? Math.ceil(bill.amount)
+      : Math.max(0, messPortion + commonPortion + allowancePortion + roomPortion);
 
     return {
       student,
@@ -113,7 +125,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       commonPortion,
       allowancePortion,
       roomPortion,
-      amount: bill ? Math.ceil(bill.amount) : amount,
+      amount,
       status: bill?.status || 'unpaid',
       hasBill: !!bill,
     };
