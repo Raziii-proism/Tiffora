@@ -97,8 +97,8 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
 
   const studentFeeStatus = students.map((student) => {
     const studentAbsences = monthAbsences.filter((a) => a.student_id === student.id).length;
-    const presentDays = BILLING_DAYS - studentAbsences - messLeaveDayCount;
     const bill = currentMonthBills.find((b) => b.student_id === student.id);
+    const presentDays = bill?.present_days ?? (BILLING_DAYS - studentAbsences - messLeaveDayCount);
     // When a generated bill exists, use its stored breakdown so the
     // displayed line items always add up to the displayed total.
     const messPortion = (bill && bill.mess_amount != null)
@@ -113,9 +113,22 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     const roomPortion = (bill && bill.room_rent_amount != null)
       ? Math.ceil(bill.room_rent_amount)
       : Math.ceil(roomRentPerStudent);
+    const calculatedAmount = Math.max(
+      0,
+      messPortion + commonPortion + allowancePortion
+    );
+
     const amount = bill
       ? Math.ceil(bill.amount)
-      : Math.max(0, messPortion + commonPortion + allowancePortion + roomPortion);
+      : calculatedAmount;
+
+    const needsReview = !!bill && (
+      amount !== calculatedAmount ||
+      bill.mess_amount == null ||
+      bill.common_amount == null ||
+      bill.allowance_amount == null ||
+      bill.room_rent_amount == null
+    );
 
     return {
       student,
@@ -126,6 +139,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
       allowancePortion,
       roomPortion,
       amount,
+      needsReview,
       status: bill?.status || 'unpaid',
       hasBill: !!bill,
     };
@@ -148,7 +162,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
   });
 
   const viewedMonthBills = bills.filter((b) => b.month === monthFirstStr);
-  const viewedMonthExpenses = expenseItems.filter((item) => item.month === monthFirstStr);
+
 
   async function handleGenerateBills() {
     setGenerating(true);
@@ -249,7 +263,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     setUpdatingBillId(null);
   }
 
-  async function createAndToggleBill(studentId: string, amount: number, presentDays: number) {
+  async function createAndToggleBill(studentId: string, amount: number, presentDays: number, mess: number, common: number, allowance: number, room: number) {
     setUpdatingBillId(studentId);
 
     const { error: err } = await supabase
@@ -260,6 +274,10 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
         month: monthFirstStr,
         present_days: presentDays,
         amount: Math.ceil(amount),
+        mess_amount: mess,
+        common_amount: common,
+        allowance_amount: allowance,
+        room_rent_amount: room,
         status: 'paid',
       });
 
@@ -363,7 +381,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
     if (hasBreakdown) {
       autoTable(doc, {
         startY: afterBoxesY,
-        head: [['Mess Bill', 'Common Bill', 'Allowance', 'Room Rent', 'Total']],
+        head: [['Mess Bill', 'Common Bill', 'Allowance', 'Room Rent', 'Billed Total']],
         body: [[
           fmtPDF(expenseBreakdown!.mess),
           fmtPDF(expenseBreakdown!.common),
@@ -512,7 +530,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
 
     const pdfTotalExpense = viewedMonthBills.length > 0
       ? viewedMonthBills.reduce((sum, b) => sum + b.amount, 0)
-      : (totalExpense > 0 ? totalExpense : viewedMonthExpenses.reduce((sum, e) => sum + e.amount, 0));
+      : studentFeeStatus.reduce((sum, s) => sum + s.amount, 0);
     const pdfTotalCollected = viewedMonthBills.length > 0
       ? viewedMonthBills.filter((b) => b.status === 'paid').reduce((sum, b) => sum + b.amount, 0)
       : totalCollected;
@@ -793,16 +811,23 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
                         <p className="text-[11px] text-amber-600">Allowance: {formatCurrency(s.allowancePortion)}</p>
                       )}
                       {s.roomPortion > 0 && (
-                        <p className="text-[11px] text-slate-400">Room Rent: {formatCurrency(s.roomPortion)}</p>
+                        <p className="text-[11px] text-slate-400">Room Rent (separate): {formatCurrency(s.roomPortion)}</p>
                       )}
                     </div>
                   </div>
                   <div className="text-right">
                     <p className="text-base font-bold text-slate-900">{formatCurrency(s.amount)}</p>
+                    {s.needsReview && (
+                      <p className="text-[11px] text-amber-600">
+                        {s.status === 'paid'
+                          ? 'Review paid bill'
+                          : 'Regenerate bill'}
+                      </p>
+                    )}
                     {bill ? (
                       <button
                         onClick={() => toggleBillStatus(bill.id, s.status)}
-                        disabled={updatingBillId === bill.id}
+                        disabled={updatingBillId === bill.id || (s.needsReview && s.status === 'unpaid')}
                         className={`mt-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-50 ${
                           s.status === 'paid'
                             ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
@@ -820,7 +845,7 @@ export function WardenFeeStatus({ students, bills, absences, messLeaves, hostel,
                       </button>
                     ) : (
                       <button
-                        onClick={() => createAndToggleBill(s.student.id, s.amount, s.presentDays)}
+                        onClick={() => createAndToggleBill(s.student.id, s.amount, s.presentDays, s.messPortion, s.commonPortion, s.allowancePortion, s.roomPortion)}
                         disabled={updatingBillId === s.student.id}
                         className="mt-1 inline-flex items-center gap-1 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-100 px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-50"
                       >

@@ -29,7 +29,18 @@ function BillBreakdownCard({ bill, variant }: { bill: Bill; variant: 'current' |
   const presentDays = bill.present_days;
 
   const messPerDay = presentDays > 0 ? Math.ceil((bill.mess_amount || 0) / presentDays) : 0;
-  const allowancePerDay = presentDays > 0 ? Math.ceil((bill.allowance_amount || 0) / presentDays) : 0;
+  const calculatedAmount = Math.max(
+    0,
+    Math.ceil(bill.mess_amount || 0) +
+    Math.ceil(bill.common_amount || 0) +
+    Math.ceil(bill.allowance_amount || 0)
+  );
+
+  const matchesMessTotal =
+    bill.mess_amount != null &&
+    bill.common_amount != null &&
+    bill.allowance_amount != null &&
+    Math.ceil(bill.amount) === calculatedAmount;
 
   const cardClass = variant === 'current'
     ? 'rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-700 p-5 text-white shadow-lg shadow-teal-600/20'
@@ -46,6 +57,11 @@ function BillBreakdownCard({ bill, variant }: { bill: Bill; variant: 'current' |
           <p className={`text-sm ${labelClass}`}>{formatMonthLabel(bill.month)}</p>
           <p className={`text-2xl font-bold ${valueClass}`}>{formatCurrency(bill.amount)}</p>
           <p className={`mt-0.5 text-xs ${labelClass}`}>{presentDays} days present</p>
+          {!matchesMessTotal && bill.status === 'unpaid' && (
+            <p className={`mt-1 text-xs ${labelClass}`}>
+              Bill requires review by warden.
+            </p>
+          )}
         </div>
         <div className="flex flex-col items-end gap-1">
           {bill.status === 'paid' ? (
@@ -101,22 +117,20 @@ function BillBreakdownCard({ bill, variant }: { bill: Bill; variant: 'current' |
             </div>
             <div className="text-right">
               <span className={`text-sm font-semibold ${valueClass}`}>{formatCurrency(bill.allowance_amount || 0)}</span>
-              {presentDays > 0 && (bill.allowance_amount || 0) > 0 && (
-                <p className={`text-[11px] ${labelClass}`}>{formatCurrency(allowancePerDay)}/day x {presentDays} days</p>
-              )}
+
             </div>
           </div>
 
           <div className="flex items-center justify-between py-2">
             <div className="flex items-center gap-2">
               <span className="text-violet-300"><BedDouble size={16} /></span>
-              <span className={`text-sm ${variant === 'current' ? 'text-slate-300' : 'text-slate-500'}`}>Room Rent</span>
+              <span className={`text-sm ${variant === 'current' ? 'text-slate-300' : 'text-slate-500'}`}>{matchesMessTotal ? "Room Rent (separate)" : "Room Rent"}</span>
             </div>
             <span className={`text-sm font-semibold ${valueClass}`}>{formatCurrency(bill.room_rent_amount || 0)}</span>
           </div>
 
           <div className={`flex items-center justify-between border-t ${dividerClass} pt-2`}>
-            <span className={`text-sm font-medium ${variant === 'current' ? 'text-teal-100' : 'text-slate-600'}`}>Total</span>
+            <span className={`text-sm font-medium ${variant === 'current' ? 'text-teal-100' : 'text-slate-600'}`}>{matchesMessTotal ? "Mess Fees Total" : "Recorded Total"}</span>
             <span className={`text-base font-bold ${valueClass}`}>{formatCurrency(bill.amount)}</span>
           </div>
         </div>
