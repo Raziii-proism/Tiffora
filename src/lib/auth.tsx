@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase, getValidAccessToken } from '@/lib/supabase';
 import type { Hostel, UserRole, Student, Warden } from '@/lib/supabase';
@@ -27,51 +28,81 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [warden, setWarden] = useState<Warden | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const identityRef = useRef<{
+    id: string | null | undefined
+  }>({ id: undefined });
+
+  function clearProfile() {
+    setRole(null);
+    setHostel(null);
+    setStudent(null);
+    setWarden(null);
+  }
+
   async function loadProfile(currentUser: User) {
-    // Check if warden
-    const { data: wardenRow } = await supabase
+    const identity = identityRef.current;
+
+    const isCurrent = () =>
+      identityRef.current === identity &&
+      identity.id === currentUser.id;
+
+    if (!isCurrent()) return;
+
+    // Check if the user is a warden
+    const { data: wardenRow, error: wardenError } = await supabase
       .from('wardens')
       .select('id, hostel_id, created_at')
       .eq('id', currentUser.id)
       .maybeSingle();
 
+    if (!isCurrent()) return;
+    if (wardenError) throw wardenError;
+
     if (wardenRow) {
-      setRole('warden');
-      setWarden(wardenRow as Warden);
-      setStudent(null);
-      const { data: hostelRow } = await supabase
+      const { data: hostelRow, error: hostelError } = await supabase
         .from('hostels')
         .select('*')
         .eq('id', (wardenRow as Warden).hostel_id)
         .maybeSingle();
+
+      if (!isCurrent()) return;
+      if (hostelError) throw hostelError;
+
+      setRole('warden');
+      setWarden(wardenRow as Warden);
+      setStudent(null);
       setHostel(hostelRow as Hostel);
       return;
     }
 
-    // Check if student
-    const { data: studentRow } = await supabase
+    // Check if the user is a student
+    const { data: studentRow, error: studentError } = await supabase
       .from('students')
       .select('*')
       .eq('id', currentUser.id)
       .maybeSingle();
 
+    if (!isCurrent()) return;
+    if (studentError) throw studentError;
+
     if (studentRow) {
-      setRole('student');
-      setStudent(studentRow as Student);
-      setWarden(null);
-      const { data: hostelRow } = await supabase
+      const { data: hostelRow, error: hostelError } = await supabase
         .from('hostels')
         .select('*')
         .eq('id', (studentRow as Student).hostel_id)
         .maybeSingle();
+
+      if (!isCurrent()) return;
+      if (hostelError) throw hostelError;
+
+      setRole('student');
+      setStudent(studentRow as Student);
+      setWarden(null);
       setHostel(hostelRow as Hostel);
       return;
     }
 
-    setRole(null);
-    setHostel(null);
-    setStudent(null);
-    setWarden(null);
+    clearProfile();
   }
 
   async function refreshProfile() {
@@ -82,82 +113,114 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function getAccessToken(): Promise<string | null> {
     const token = await getValidAccessToken();
+
     if (token) {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      if (s) {
+      const identity = identityRef.current;
+
+      const {
+        data: { session: s }
+      } = await supabase.auth.getSession();
+
+      if (
+        s &&
+        identityRef.current === identity &&
+        identity.id === s.user.id
+      ) {
         setSession(s);
-        setUser(s.user ?? null);
+        setUser(s.user);
       }
     }
+
     return token;
   }
 
   useEffect(() => {
     let isMounted = true;
+    let pending: ReturnType<typeof setTimeout> | undefined;
 
-    // Listen for auth state changes
+    identityRef.current = { id: undefined };
+
     const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, s) => {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, s) => {
       if (!isMounted) return;
 
       setSession(s);
       setUser(s?.user ?? null);
 
-      if (event === 'TOKEN_REFRESHED') {
-        // Token was silently refreshed; keep current state without resetting UI loading
+      const nextId = s?.user.id ?? null;
+
+      // Prevent unnecessary loading when switching tabs
+      // or refreshing the authentication token.
+      if (identityRef.current.id === nextId) {
         return;
       }
 
-      if (s?.user) {
-        setLoading(true);
-        try {
-          await loadProfile(s.user);
-        } finally {
-          if (isMounted) setLoading(false);
-        }
-      } else {
-        setRole(null);
-        setHostel(null);
-        setStudent(null);
-        setWarden(null);
-        setLoading(false);
-      }
-    });
+      const identity = { id: nextId };
 
-    // Initial session load
-    supabase.auth.getSession().then(async ({ data: { session: s } }) => {
-      if (!isMounted) return;
-      setSession(s);
-      setUser(s?.user ?? null);
-      if (s?.user) {
-        try {
-          await loadProfile(s.user);
-        } finally {
-          if (isMounted) setLoading(false);
-        }
-      } else {
+      identityRef.current = identity;
+
+      clearTimeout(pending);
+      clearProfile();
+
+      // Handle logout
+      if (!s?.user) {
         setLoading(false);
+        return;
       }
+
+      // Show loading only for initial login or account changes
+      setLoading(true);
+
+      const nextUser = s.user;
+
+      // Run database requests outside the authentication callback
+      pending = setTimeout(async () => {
+        try {
+          await loadProfile(nextUser);
+        } catch (error) {
+          console.error('Profile loading failed:', error);
+        } finally {
+          if (
+            isMounted &&
+            identityRef.current === identity
+          ) {
+            setLoading(false);
+          }
+        }
+      }, 0);
     });
 
     return () => {
       isMounted = false;
+      clearTimeout(pending);
+      identityRef.current = { id: undefined };
       subscription.unsubscribe();
     };
   }, []);
 
   async function signOut() {
-    await supabase.auth.signOut();
-    setRole(null);
-    setHostel(null);
-    setStudent(null);
-    setWarden(null);
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      throw error;
+    }
   }
 
   return (
     <AuthContext.Provider
-      value={{ session, user, role, hostel, student, warden, loading, signOut, refreshProfile, getAccessToken }}
+      value={{
+        session,
+        user,
+        role,
+        hostel,
+        student,
+        warden,
+        loading,
+        signOut,
+        refreshProfile,
+        getAccessToken
+      }}
     >
       {children}
     </AuthContext.Provider>
@@ -166,6 +229,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+
+  if (!ctx) {
+    throw new Error('useAuth must be used within AuthProvider');
+  }
+
   return ctx;
 }
