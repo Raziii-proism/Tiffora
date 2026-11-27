@@ -8,20 +8,13 @@ import {
   CheckCircle2,
   XCircle,
   ChevronRight,
-  ChevronLeft,
   CalendarPlus,
   Trash2
 } from 'lucide-react';
 
 import type { Student, Hostel, Absence } from '@/lib/supabase';
 import { supabase } from '@/lib/supabase';
-
-import {
-  getDaysInMonth,
-  getMonthName,
-  todayString,
-  formatDate
-} from '@/lib/utils';
+import { getDaysInMonth, getMonthName } from '@/lib/utils';
 
 type StudentHomeProps = {
   student: Student;
@@ -32,6 +25,49 @@ type StudentHomeProps = {
   onAbsenceChange: () => void;
 };
 
+// Use local dates instead of UTC dates
+function localDate(date: Date): string {
+  return `${date.getFullYear()}-${String(
+    date.getMonth() + 1
+  ).padStart(2, '0')}-${String(
+    date.getDate()
+  ).padStart(2, '0')}`;
+}
+
+function dateLimits(now: Date) {
+  const tomorrow = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1
+  );
+
+  const nextMonthLastDay = new Date(
+    now.getFullYear(),
+    now.getMonth() + 2,
+    0
+  ).getDate();
+
+  const maximum = new Date(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    Math.min(now.getDate(), nextMonthLastDay)
+  );
+
+  return {
+    min: localDate(tomorrow),
+    max: localDate(maximum)
+  };
+}
+
+function dateLabel(date: string): string {
+  return new Date(date + 'T00:00:00')
+    .toLocaleDateString('en-GB', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short'
+    });
+}
+
 export function StudentHome({
   student,
   hostel,
@@ -41,23 +77,17 @@ export function StudentHome({
   onAbsenceChange
 }: StudentHomeProps) {
 
-  const [showMarkAbsent, setShowMarkAbsent] = useState(false);
+  const [showMarkAbsent, setShowMarkAbsent] =
+    useState(false);
+
+  const [selectedDate, setSelectedDate] =
+    useState('');
 
   const [selectedDates, setSelectedDates] =
     useState<string[]>([]);
 
-  const [calendarMonth, setCalendarMonth] = useState(() => {
-    const today = new Date();
-    today.setDate(today.getDate() + 1);
-
-    return new Date(
-      today.getFullYear(),
-      today.getMonth(),
-      1
-    );
-  });
-
-  const [marking, setMarking] = useState(false);
+  const [marking, setMarking] =
+    useState(false);
 
   const [removingId, setRemovingId] =
     useState<string | null>(null);
@@ -82,114 +112,64 @@ export function StudentHome({
     );
   });
 
-  const presentDays = daysInMonth - monthAbsences.length;
-
-  // Allowed date range
-  function getDateLimits(reference: Date) {
-    const tomorrow = new Date(reference);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const lastDay = new Date(
-      reference.getFullYear(),
-      reference.getMonth() + 2,
-      0
-    ).getDate();
-
-    const maximum = new Date(
-      reference.getFullYear(),
-      reference.getMonth() + 1,
-      Math.min(reference.getDate(), lastDay)
-    );
-
-    return {
-      min: formatDate(tomorrow),
-      max: formatDate(maximum)
-    };
-  }
+  const presentDays =
+    daysInMonth - monthAbsences.length;
 
   const {
     min: tomorrowStr,
     max: maxDateStr
-  } = getDateLimits(now);
-
-  const calendarYear = calendarMonth.getFullYear();
-
-  const calendarMonthIndex = calendarMonth.getMonth();
-
-  const firstWeekday = new Date(
-    calendarYear,
-    calendarMonthIndex,
-    1
-  ).getDay();
-
-  const calendarDays = getDaysInMonth(
-    calendarYear,
-    calendarMonthIndex
-  );
-
-  const calendarMonthKey =
-    formatDate(calendarMonth).slice(0, 7);
-
-  const alreadyAbsent = new Set(
-    absences.map((a) => a.absent_date)
-  );
+  } = dateLimits(now);
 
   const upcomingAbsences = absences
-    .filter((a) => a.absent_date >= todayString())
+    .filter((a) => a.absent_date >= localDate(now))
     .sort((a, b) =>
       a.absent_date.localeCompare(b.absent_date)
     );
 
-  // Navigate calendar months
-  function moveCalendar(offset: number) {
-    setCalendarMonth((previous) => {
-      const next = new Date(
-        previous.getFullYear(),
-        previous.getMonth() + offset,
-        1
-      );
+  const cutoffLabel = (() => {
+    const [h, m] = (
+      hostel.absence_cutoff_time || '12:10'
+    ).split(':').map(Number);
 
-      const key = formatDate(next).slice(0, 7);
+    const period = h >= 12 ? 'PM' : 'AM';
 
-      if (
-        key < tomorrowStr.slice(0, 7) ||
-        key > maxDateStr.slice(0, 7)
-      ) {
-        return previous;
-      }
+    const h12 =
+      h === 0 ? 12 : h > 12 ? h - 12 : h;
 
-      return next;
-    });
-  }
+    return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+  })();
 
-  // Check attendance deadline
+  // Validate attendance date and cutoff
   function canMarkAbsentForDate(dateStr: string): {
     allowed: boolean;
     reason: string;
   } {
     const currentTime = new Date();
+    const limits = dateLimits(currentTime);
 
-    const today = new Date(currentTime);
-    today.setHours(0, 0, 0, 0);
-
-    const target = new Date(dateStr + 'T00:00:00');
-    target.setHours(0, 0, 0, 0);
-
-    const diffDays = Math.round(
-      (target.getTime() - today.getTime()) / 86400000
+    const target = new Date(
+      dateStr + 'T00:00:00'
     );
 
-    if (diffDays < 1) {
+    if (
+      !dateStr ||
+      !Number.isFinite(target.getTime()) ||
+      localDate(target) !== dateStr
+    ) {
       return {
         allowed: false,
-        reason: 'You can only mark absence for future dates.'
+        reason: 'Please select a valid date.'
       };
     }
 
-    if (
-      diffDays > 31 ||
-      dateStr > getDateLimits(currentTime).max
-    ) {
+    if (dateStr < limits.min) {
+      return {
+        allowed: false,
+        reason: 'You can only mark absence for future dates starting tomorrow.'
+      };
+    }
+
+    if (dateStr > limits.max) {
       return {
         allowed: false,
         reason: 'You can only mark absence up to 1 month in advance.'
@@ -197,31 +177,29 @@ export function StudentHome({
     }
 
     const dayBefore = new Date(target);
-    dayBefore.setDate(dayBefore.getDate() - 1);
+
+    dayBefore.setDate(
+      dayBefore.getDate() - 1
+    );
 
     const [ch, cm] = (
       hostel.absence_cutoff_time || '12:10'
     ).split(':').map(Number);
 
     const cutoff = new Date(dayBefore);
+
     cutoff.setHours(ch, cm, 0, 0);
 
     if (currentTime > cutoff) {
       const cutoffDateLabel =
-        dayBefore.toLocaleDateString('en-US', {
+        dayBefore.toLocaleDateString('en-GB', {
           month: 'short',
           day: 'numeric'
         });
 
-      const cutoffTimeLabel =
-        cutoff.toLocaleTimeString('en-US', {
-          hour: 'numeric',
-          minute: '2-digit'
-        });
-
       return {
         allowed: false,
-        reason: `The cutoff was ${cutoffTimeLabel} on ${cutoffDateLabel}. It is too late to mark this date.`
+        reason: `The cutoff for ${dateLabel(dateStr)} was ${cutoffLabel} on ${cutoffDateLabel}. It is too late to mark this date.`
       };
     }
 
@@ -231,45 +209,74 @@ export function StudentHome({
     };
   }
 
-  // Select or deselect a date
-  function toggleDate(date: string) {
-    if (marking) return;
-
-    setMessage(null);
-
-    if (selectedDates.includes(date)) {
-      setSelectedDates((previous) =>
-        previous.filter((d) => d !== date)
-      );
-
-      return;
+  function validateDate(date: string): string | null {
+    if (!date) {
+      return 'Please select a date.';
     }
 
     const check = canMarkAbsentForDate(date);
 
-    if (!check.allowed || alreadyAbsent.has(date)) {
+    if (!check.allowed) {
+      return check.reason;
+    }
+
+    if (
+      absences.some((a) => a.absent_date === date)
+    ) {
+      return 'You are already marked absent for this date.';
+    }
+
+    return null;
+  }
+
+  // Add another selected date
+  function addDate() {
+    if (marking) return;
+
+    const error = validateDate(selectedDate);
+
+    if (error) {
       setMessage({
         type: 'error',
-        text: alreadyAbsent.has(date)
-          ? 'You are already marked absent for this date.'
-          : check.reason
+        text: error
       });
 
       return;
     }
 
-    setSelectedDates((previous) =>
-      [...new Set([...previous, date])].sort()
+    if (selectedDates.includes(selectedDate)) {
+      setMessage({
+        type: 'error',
+        text: 'This date is already selected.'
+      });
+
+      return;
+    }
+
+    setSelectedDates((dates) =>
+      [...new Set([...dates, selectedDate])].sort()
     );
+
+    setSelectedDate('');
+    setMessage(null);
   }
 
-  // Save all selected absences
+  // Include the current input date if Add Date
+  // has not been pressed yet
+  const datesToConfirm = [
+    ...new Set([
+      ...selectedDates,
+      ...(selectedDate ? [selectedDate] : [])
+    ])
+  ].sort();
+
+  // Confirm all selected dates together
   async function handleMarkAbsent() {
     if (marking || removingId !== null) return;
 
-    const dates = [...new Set(selectedDates)].sort();
+    const dates = datesToConfirm;
 
-    if (dates.length === 0) {
+    if (!dates.length) {
       setMessage({
         type: 'error',
         text: 'Please select at least one date.'
@@ -278,23 +285,14 @@ export function StudentHome({
       return;
     }
 
-    // Validate every selected date again
+    // Validate every date before saving
     for (const date of dates) {
-      const check = canMarkAbsentForDate(date);
+      const error = validateDate(date);
 
-      if (!check.allowed) {
+      if (error) {
         setMessage({
           type: 'error',
-          text: `${date}: ${check.reason}`
-        });
-
-        return;
-      }
-
-      if (alreadyAbsent.has(date)) {
-        setMessage({
-          type: 'error',
-          text: `${date} is already marked absent.`
+          text: `${dateLabel(date)}: ${error}`
         });
 
         return;
@@ -318,7 +316,7 @@ export function StudentHome({
         setMessage({
           type: 'error',
           text: error.code === '23505'
-            ? 'A selected date is already marked absent. Refresh and select again.'
+            ? 'A selected date is already marked absent. Refresh and check your upcoming absences.'
             : error.message
         });
 
@@ -336,6 +334,7 @@ export function StudentHome({
         }.`
       });
 
+      setSelectedDate('');
       setSelectedDates([]);
       setShowMarkAbsent(false);
 
@@ -352,22 +351,24 @@ export function StudentHome({
     }
   }
 
-  // Check whether an absence can be removed
+  // Check whether absence can be removed
   function canRemoveAbsence(absentDate: string): boolean {
     const target = new Date(
       absentDate + 'T00:00:00'
     );
 
-    target.setHours(0, 0, 0, 0);
-
     const dayBefore = new Date(target);
-    dayBefore.setDate(dayBefore.getDate() - 1);
+
+    dayBefore.setDate(
+      dayBefore.getDate() - 1
+    );
 
     const [ch, cm] = (
       hostel.absence_cutoff_time || '12:10'
     ).split(':').map(Number);
 
     const cutoff = new Date(dayBefore);
+
     cutoff.setHours(ch, cm, 0, 0);
 
     return new Date() <= cutoff;
@@ -402,17 +403,9 @@ export function StudentHome({
         });
 
       } else {
-        const dateLabel = new Date(
-          absence.absent_date + 'T00:00:00'
-        ).toLocaleDateString('en-US', {
-          weekday: 'long',
-          month: 'short',
-          day: 'numeric'
-        });
-
         setMessage({
           type: 'success',
-          text: `Removed absence for ${dateLabel}. You will be marked present.`
+          text: `Removed absence for ${dateLabel(absence.absent_date)}. You will be marked present.`
         });
 
         onAbsenceChange();
@@ -428,17 +421,6 @@ export function StudentHome({
       setRemovingId(null);
     }
   }
-
-  const cutoffLabel = (() => {
-    const [h, m] = (
-      hostel.absence_cutoff_time || '12:10'
-    ).split(':').map(Number);
-
-    const period = h >= 12 ? 'PM' : 'AM';
-    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-
-    return `${h12}:${String(m).padStart(2, '0')} ${period}`;
-  })();
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -477,6 +459,7 @@ export function StudentHome({
         <div className="flex items-center justify-between">
 
           <div>
+
             <p className="text-xs font-medium text-slate-500">
               Today's Status
             </p>
@@ -488,9 +471,11 @@ export function StudentHome({
                 day: 'numeric'
               })}
             </p>
+
           </div>
 
           {isAbsentToday ? (
+
             <div className="flex items-center gap-2 rounded-xl bg-rose-50 px-3 py-2">
 
               <XCircle className="h-5 w-5 text-rose-500" />
@@ -500,7 +485,9 @@ export function StudentHome({
               </span>
 
             </div>
+
           ) : (
+
             <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2">
 
               <CheckCircle2 className="h-5 w-5 text-emerald-500" />
@@ -510,18 +497,22 @@ export function StudentHome({
               </span>
 
             </div>
+
           )}
 
         </div>
+
       </div>
 
-      {/* Multiple date absence marking */}
+      {/* Mark Absent */}
       <div className="card">
 
         <div className="flex items-start gap-3">
 
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-amber-50">
+
             <CalendarX className="h-6 w-6 text-amber-500" />
+
           </div>
 
           <div className="flex-1">
@@ -531,12 +522,13 @@ export function StudentHome({
             </p>
 
             <p className="mt-0.5 text-xs text-slate-500">
-              Select multiple dates up to 1 month ahead.
-              Each date must be marked before {cutoffLabel}
-              {' '}on the previous day.
+              Mark yourself absent for one or more dates up to
+              1 month ahead. Each date must be marked before
+              {' '}{cutoffLabel} on the previous day.
             </p>
 
           </div>
+
         </div>
 
         {!showMarkAbsent ? (
@@ -544,28 +536,20 @@ export function StudentHome({
           <button
             type="button"
             onClick={() => {
-              const tomorrow = new Date(
-                getDateLimits(new Date()).min + 'T00:00:00'
-              );
-
-              setCalendarMonth(
-                new Date(
-                  tomorrow.getFullYear(),
-                  tomorrow.getMonth(),
-                  1
-                )
-              );
-
-              setSelectedDates([]);
               setShowMarkAbsent(true);
+              setSelectedDate('');
+              setSelectedDates([]);
               setMessage(null);
             }}
             className="btn-danger mt-3 w-full"
           >
 
             <span className="flex items-center justify-center gap-2">
+
               <CalendarPlus size={18} />
-              Mark Absent for Multiple Dates
+
+              Mark Absent for Dates
+
             </span>
 
           </button>
@@ -574,270 +558,161 @@ export function StudentHome({
 
           <div className="mt-3 space-y-3 animate-scale-in">
 
-            {/* Calendar */}
-            <div className="rounded-xl border border-slate-200 p-3">
+            {/* Original browser calendar */}
+            <div>
 
-              <div className="mb-3 flex items-center justify-between">
+              <label
+                htmlFor="absence-date"
+                className="label-text"
+              >
+                Select Date
+              </label>
 
-                <button
-                  type="button"
-                  aria-label="Previous month"
-                  onClick={() => moveCalendar(-1)}
-                  disabled={
-                    marking ||
-                    calendarMonthKey <= tomorrowStr.slice(0, 7)
-                  }
-                  className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-30"
-                >
-                  <ChevronLeft size={20} />
-                </button>
+              <input
+                id="absence-date"
+                type="date"
+                value={selectedDate}
+                min={tomorrowStr}
+                max={maxDateStr}
+                disabled={marking}
+                onChange={(e) => {
+                  setSelectedDate(e.target.value);
+                  setMessage(null);
+                }}
+                className="input-field"
+              />
 
-                <p className="text-sm font-bold text-slate-900">
-                  {getMonthName(calendarMonthIndex)} {calendarYear}
-                </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Select a date from tomorrow up to 1 month ahead.
+              </p>
 
-                <button
-                  type="button"
-                  aria-label="Next month"
-                  onClick={() => moveCalendar(1)}
-                  disabled={
-                    marking ||
-                    calendarMonthKey >= maxDateStr.slice(0, 7)
-                  }
-                  className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-30"
-                >
-                  <ChevronRight size={20} />
-                </button>
+            </div>
 
-              </div>
+            {/* Add another date */}
+            <button
+              type="button"
+              onClick={addDate}
+              disabled={marking || !selectedDate}
+              className="btn-secondary w-full disabled:opacity-50"
+            >
 
-              {/* Calendar weekdays */}
-              <div className="grid grid-cols-7 gap-1">
+              <span className="flex items-center justify-center gap-2">
 
-                {[
-                  'Sun',
-                  'Mon',
-                  'Tue',
-                  'Wed',
-                  'Thu',
-                  'Fri',
-                  'Sat'
-                ].map((day) => (
+                <CalendarPlus size={17} />
+
+                Add Date
+
+              </span>
+
+            </button>
+
+            {/* Selected date list */}
+            {selectedDates.length > 0 && (
+
+              <div className="space-y-2">
+
+                <div className="flex items-center justify-between">
+
+                  <p className="text-sm font-semibold text-slate-900">
+                    Selected Dates ({selectedDates.length})
+                  </p>
+
+                  <button
+                    type="button"
+                    disabled={marking}
+                    onClick={() => {
+                      setSelectedDates([]);
+                      setSelectedDate('');
+                      setMessage(null);
+                    }}
+                    className="text-xs font-medium text-slate-500"
+                  >
+                    Clear all
+                  </button>
+
+                </div>
+
+                {selectedDates.map((date) => (
 
                   <div
-                    key={day}
-                    className="pb-1 text-center text-[10px] font-medium text-slate-500"
+                    key={date}
+                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3"
                   >
-                    {day}
+
+                    <div className="flex items-center gap-2">
+
+                      <CalendarX
+                        size={16}
+                        className="text-slate-400"
+                      />
+
+                      <span className="text-sm font-medium text-slate-700">
+                        {dateLabel(date)}
+                      </span>
+
+                    </div>
+
+                    <button
+                      type="button"
+                      aria-label={`Remove ${dateLabel(date)}`}
+                      disabled={marking}
+                      onClick={() => {
+                        setSelectedDates((dates) =>
+                          dates.filter((d) => d !== date)
+                        );
+
+                        setMessage(null);
+                      }}
+                      className="text-slate-400 hover:text-rose-600"
+                    >
+
+                      <XCircle size={18} />
+
+                    </button>
+
                   </div>
 
                 ))}
 
-                {Array.from(
-                  { length: firstWeekday },
-                  (_, i) => (
-                    <div key={`empty-${i}`} aria-hidden="true" />
-                  )
-                )}
-
-                {/* Calendar dates */}
-                {Array.from(
-                  { length: calendarDays },
-                  (_, i) => {
-
-                    const day = i + 1;
-
-                    const date = formatDate(
-                      new Date(
-                        calendarYear,
-                        calendarMonthIndex,
-                        day
-                      )
-                    );
-
-                    const selected =
-                      selectedDates.includes(date);
-
-                    const booked =
-                      alreadyAbsent.has(date);
-
-                    const check =
-                      canMarkAbsentForDate(date);
-
-                    const unavailable =
-                      date < tomorrowStr ||
-                      date > maxDateStr ||
-                      booked ||
-                      !check.allowed;
-
-                    const label = new Date(
-                      date + 'T00:00:00'
-                    ).toLocaleDateString('en-US', {
-                      weekday: 'long',
-                      month: 'long',
-                      day: 'numeric',
-                      year: 'numeric'
-                    });
-
-                    return (
-
-                      <button
-                        key={date}
-                        type="button"
-                        aria-label={`${label}${
-                          booked
-                            ? ', already absent'
-                            : unavailable
-                              ? ', unavailable'
-                              : ''
-                        }`}
-                        aria-pressed={selected}
-                        title={
-                          booked
-                            ? 'Already marked absent'
-                            : unavailable
-                              ? check.reason || 'Unavailable'
-                              : label
-                        }
-                        disabled={
-                          marking ||
-                          (unavailable && !selected)
-                        }
-                        onClick={() => toggleDate(date)}
-                        className={`aspect-square rounded-lg text-sm font-semibold transition-all ${
-                          selected
-                            ? 'bg-teal-600 text-white shadow-sm'
-                            : booked
-                              ? 'bg-rose-100 text-rose-600 line-through'
-                              : unavailable
-                                ? 'bg-slate-50 text-slate-300'
-                                : 'bg-slate-100 text-slate-800 hover:bg-teal-100'
-                        }`}
-                      >
-                        {day}
-                      </button>
-
-                    );
-                  }
-                )}
-
               </div>
-
-              {/* Calendar legend */}
-              <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500">
-
-                <span className="flex items-center gap-1">
-                  <span className="h-3 w-3 rounded bg-teal-600" />
-                  Selected
-                </span>
-
-                <span className="flex items-center gap-1">
-                  <span className="h-3 w-3 rounded bg-rose-100" />
-                  Already absent
-                </span>
-
-                <span className="flex items-center gap-1">
-                  <span className="h-3 w-3 rounded bg-slate-100 border border-slate-200" />
-                  Unavailable
-                </span>
-
-              </div>
-
-            </div>
-
-            {/* Selected dates */}
-            <div className="flex items-center justify-between">
-
-              <p className="text-sm font-semibold text-slate-900">
-                Selected Dates ({selectedDates.length})
-              </p>
-
-              <button
-                type="button"
-                disabled={marking || selectedDates.length === 0}
-                onClick={() => {
-                  setSelectedDates([]);
-                  setMessage(null);
-                }}
-                className="text-xs font-medium text-teal-700 disabled:opacity-40"
-              >
-                Clear All
-              </button>
-
-            </div>
-
-            {selectedDates.length > 0 ? (
-
-              <>
-
-                <div className="flex flex-wrap gap-2">
-
-                  {selectedDates.map((date) => (
-
-                    <button
-                      key={date}
-                      type="button"
-                      disabled={marking}
-                      onClick={() => toggleDate(date)}
-                      className="inline-flex items-center gap-1 rounded-lg bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-700 border border-teal-100"
-                    >
-
-                      {new Date(
-                        date + 'T00:00:00'
-                      ).toLocaleDateString('en-GB', {
-                        day: 'numeric',
-                        month: 'short'
-                      })}
-
-                      <XCircle size={14} aria-hidden="true" />
-
-                    </button>
-
-                  ))}
-
-                </div>
-
-                <div className="rounded-xl bg-slate-50 px-4 py-3">
-
-                  <p className="text-sm text-slate-600">
-
-                    You are about to mark yourself{' '}
-
-                    <span className="font-semibold text-rose-600">
-                      absent
-                    </span>
-
-                    {' '}for{' '}
-
-                    <span className="font-bold text-slate-900">
-
-                      {selectedDates.length}{' '}
-
-                      {selectedDates.length === 1
-                        ? 'day'
-                        : 'days'}
-
-                    </span>.
-
-                    These dates will count as absences
-                    for mess billing.
-
-                  </p>
-
-                </div>
-
-              </>
-
-            ) : (
-
-              <p className="text-xs text-slate-500">
-                Tap any available dates to select them.
-                Tap again to remove a selection.
-              </p>
 
             )}
 
-            {/* Confirmation buttons */}
+            {/* Confirmation summary */}
+            {datesToConfirm.length > 0 && (
+
+              <div className="rounded-xl bg-slate-50 px-4 py-3">
+
+                <p className="text-sm text-slate-600">
+
+                  You are about to mark yourself{' '}
+
+                  <span className="font-semibold text-rose-600">
+                    absent
+                  </span>
+
+                  {' '}for{' '}
+
+                  <span className="font-semibold text-slate-900">
+
+                    {datesToConfirm.length}{' '}
+
+                    {datesToConfirm.length === 1
+                      ? 'day'
+                      : 'days'}
+
+                  </span>.
+
+                  These dates will count as absences
+                  for mess billing.
+
+                </p>
+
+              </div>
+
+            )}
+
+            {/* Cancel and confirm buttons */}
             <div className="flex gap-2">
 
               <button
@@ -845,6 +720,7 @@ export function StudentHome({
                 disabled={marking}
                 onClick={() => {
                   setShowMarkAbsent(false);
+                  setSelectedDate('');
                   setSelectedDates([]);
                   setMessage(null);
                 }}
@@ -859,21 +735,16 @@ export function StudentHome({
                 disabled={
                   marking ||
                   removingId !== null ||
-                  selectedDates.length === 0
+                  datesToConfirm.length === 0
                 }
                 className="btn-danger flex-1 disabled:opacity-50"
               >
 
                 {marking
                   ? 'Marking...'
-                  : selectedDates.length === 0
-                    ? 'Confirm Absences'
-                    : `Confirm ${selectedDates.length} ${
-                        selectedDates.length === 1
-                          ? 'Absence'
-                          : 'Absences'
-                      }`
-                }
+                  : datesToConfirm.length > 1
+                    ? `Confirm ${datesToConfirm.length} Absences`
+                    : 'Confirm Absence'}
 
               </button>
 
@@ -886,14 +757,14 @@ export function StudentHome({
         {/* Success or error message */}
         {message && (
 
-          <div className={`mt-3 rounded-xl px-4 py-3 text-sm font-medium ${
-            message.type === 'success'
-              ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-              : 'bg-rose-50 text-rose-700 border border-rose-100'
-          }`}>
-
+          <div
+            className={`mt-3 rounded-xl px-4 py-3 text-sm font-medium ${
+              message.type === 'success'
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                : 'bg-rose-50 text-rose-700 border border-rose-100'
+            }`}
+          >
             {message.text}
-
           </div>
 
         )}
@@ -906,7 +777,7 @@ export function StudentHome({
         <div className="card">
 
           <p className="text-sm font-bold text-slate-900 mb-3">
-            Upcoming Absences ({upcomingAbsences.length})
+            Upcoming Absences
           </p>
 
           <div className="space-y-2">
@@ -924,13 +795,7 @@ export function StudentHome({
 
                   <span className="text-sm font-medium text-rose-700">
 
-                    {new Date(
-                      a.absent_date + 'T00:00:00'
-                    ).toLocaleDateString('en-US', {
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric'
-                    })}
+                    {dateLabel(a.absent_date)}
 
                   </span>
 
@@ -976,7 +841,7 @@ export function StudentHome({
 
       )}
 
-      {/* Pay mess fee */}
+      {/* Pay Mess Fee */}
       <button
         type="button"
         onClick={() => onNavigate('fees')}
@@ -986,7 +851,9 @@ export function StudentHome({
         <div className="flex items-center gap-3">
 
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-teal-50">
+
             <Receipt className="h-6 w-6 text-teal-600" />
+
           </div>
 
           <div className="flex-1">
