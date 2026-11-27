@@ -1,3 +1,6 @@
+// src/components/StudentHome.tsx
+// Complete replacement: direct multiple-date selection.
+// Test attendance submission after deployment.
 
 import { useState } from 'react';
 import {
@@ -8,6 +11,7 @@ import {
   CheckCircle2,
   XCircle,
   ChevronRight,
+  ChevronLeft,
   CalendarPlus,
   Trash2
 } from 'lucide-react';
@@ -25,7 +29,7 @@ type StudentHomeProps = {
   onAbsenceChange: () => void;
 };
 
-// Use local dates instead of UTC dates
+// Local date conversion without UTC date shifting
 function localDate(date: Date): string {
   return `${date.getFullYear()}-${String(
     date.getMonth() + 1
@@ -80,14 +84,23 @@ export function StudentHome({
   const [showMarkAbsent, setShowMarkAbsent] =
     useState(false);
 
-  const [selectedDate, setSelectedDate] =
-    useState('');
-
   const [selectedDates, setSelectedDates] =
     useState<string[]>([]);
 
-  const [marking, setMarking] =
-    useState(false);
+  const [calendarMonth, setCalendarMonth] =
+    useState(() => {
+      const first = new Date(
+        dateLimits(new Date()).min + 'T00:00:00'
+      );
+
+      return new Date(
+        first.getFullYear(),
+        first.getMonth(),
+        1
+      );
+    });
+
+  const [marking, setMarking] = useState(false);
 
   const [removingId, setRemovingId] =
     useState<string | null>(null);
@@ -120,6 +133,24 @@ export function StudentHome({
     max: maxDateStr
   } = dateLimits(now);
 
+  const calendarYear = calendarMonth.getFullYear();
+
+  const calendarIndex = calendarMonth.getMonth();
+
+  const calendarKey =
+    localDate(calendarMonth).slice(0, 7);
+
+  const firstWeekday = new Date(
+    calendarYear,
+    calendarIndex,
+    1
+  ).getDay();
+
+  const calendarDays = getDaysInMonth(
+    calendarYear,
+    calendarIndex
+  );
+
   const upcomingAbsences = absences
     .filter((a) => a.absent_date >= localDate(now))
     .sort((a, b) =>
@@ -139,7 +170,7 @@ export function StudentHome({
     return `${h12}:${String(m).padStart(2, '0')} ${period}`;
   })();
 
-  // Validate attendance date and cutoff
+  // Validate attendance date
   function canMarkAbsentForDate(dateStr: string): {
     allowed: boolean;
     reason: string;
@@ -210,10 +241,6 @@ export function StudentHome({
   }
 
   function validateDate(date: string): string | null {
-    if (!date) {
-      return 'Please select a date.';
-    }
-
     const check = canMarkAbsentForDate(date);
 
     if (!check.allowed) {
@@ -229,11 +256,47 @@ export function StudentHome({
     return null;
   }
 
-  // Add another selected date
-  function addDate() {
+  // Move between calendar months
+  function moveCalendar(offset: number) {
     if (marking) return;
 
-    const error = validateDate(selectedDate);
+    const limits = dateLimits(new Date());
+
+    setCalendarMonth((previous) => {
+      const next = new Date(
+        previous.getFullYear(),
+        previous.getMonth() + offset,
+        1
+      );
+
+      const key = localDate(next).slice(0, 7);
+
+      if (
+        key < limits.min.slice(0, 7) ||
+        key > limits.max.slice(0, 7)
+      ) {
+        return previous;
+      }
+
+      return next;
+    });
+  }
+
+  // Select or deselect multiple dates directly
+  function toggleDate(date: string) {
+    if (marking) return;
+
+    setMessage(null);
+
+    if (selectedDates.includes(date)) {
+      setSelectedDates((previous) =>
+        previous.filter((d) => d !== date)
+      );
+
+      return;
+    }
+
+    const error = validateDate(date);
 
     if (error) {
       setMessage({
@@ -244,39 +307,18 @@ export function StudentHome({
       return;
     }
 
-    if (selectedDates.includes(selectedDate)) {
-      setMessage({
-        type: 'error',
-        text: 'This date is already selected.'
-      });
-
-      return;
-    }
-
-    setSelectedDates((dates) =>
-      [...new Set([...dates, selectedDate])].sort()
+    setSelectedDates((previous) =>
+      [...new Set([...previous, date])].sort()
     );
-
-    setSelectedDate('');
-    setMessage(null);
   }
-
-  // Include the current input date if Add Date
-  // has not been pressed yet
-  const datesToConfirm = [
-    ...new Set([
-      ...selectedDates,
-      ...(selectedDate ? [selectedDate] : [])
-    ])
-  ].sort();
 
   // Confirm all selected dates together
   async function handleMarkAbsent() {
     if (marking || removingId !== null) return;
 
-    const dates = datesToConfirm;
+    const dates = [...new Set(selectedDates)].sort();
 
-    if (!dates.length) {
+    if (dates.length === 0) {
       setMessage({
         type: 'error',
         text: 'Please select at least one date.'
@@ -285,7 +327,7 @@ export function StudentHome({
       return;
     }
 
-    // Validate every date before saving
+    // Revalidate every date before submission
     for (const date of dates) {
       const error = validateDate(date);
 
@@ -316,7 +358,7 @@ export function StudentHome({
         setMessage({
           type: 'error',
           text: error.code === '23505'
-            ? 'A selected date is already marked absent. Refresh and check your upcoming absences.'
+            ? 'One of the selected dates is already marked absent. Refresh and check your upcoming absences.'
             : error.message
         });
 
@@ -334,7 +376,6 @@ export function StudentHome({
         }.`
       });
 
-      setSelectedDate('');
       setSelectedDates([]);
       setShowMarkAbsent(false);
 
@@ -351,7 +392,7 @@ export function StudentHome({
     }
   }
 
-  // Check whether absence can be removed
+  // Check whether an absence can be removed
   function canRemoveAbsence(absentDate: string): boolean {
     const target = new Date(
       absentDate + 'T00:00:00'
@@ -451,6 +492,7 @@ export function StudentHome({
           )}
 
         </div>
+
       </div>
 
       {/* Today's status */}
@@ -465,11 +507,13 @@ export function StudentHome({
             </p>
 
             <p className="mt-1 text-lg font-bold text-slate-900">
+
               {now.toLocaleDateString('en-US', {
                 weekday: 'long',
                 month: 'short',
                 day: 'numeric'
               })}
+
             </p>
 
           </div>
@@ -522,9 +566,11 @@ export function StudentHome({
             </p>
 
             <p className="mt-0.5 text-xs text-slate-500">
-              Mark yourself absent for one or more dates up to
-              1 month ahead. Each date must be marked before
+
+              Select multiple dates up to 1 month ahead.
+              Each date must be marked before
               {' '}{cutoffLabel} on the previous day.
+
             </p>
 
           </div>
@@ -536,10 +582,23 @@ export function StudentHome({
           <button
             type="button"
             onClick={() => {
-              setShowMarkAbsent(true);
-              setSelectedDate('');
+
+              const first = new Date(
+                dateLimits(new Date()).min + 'T00:00:00'
+              );
+
+              setCalendarMonth(
+                new Date(
+                  first.getFullYear(),
+                  first.getMonth(),
+                  1
+                )
+              );
+
               setSelectedDates([]);
+              setShowMarkAbsent(true);
               setMessage(null);
+
             }}
             className="btn-danger mt-3 w-full"
           >
@@ -558,119 +617,213 @@ export function StudentHome({
 
           <div className="mt-3 space-y-3 animate-scale-in">
 
-            {/* Original browser calendar */}
-            <div>
+            {/* Minimal white calendar */}
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
 
-              <label
-                htmlFor="absence-date"
-                className="label-text"
-              >
-                Select Date
-              </label>
+              {/* Month navigation */}
+              <div className="mb-4 flex items-center justify-between">
 
-              <input
-                id="absence-date"
-                type="date"
-                value={selectedDate}
-                min={tomorrowStr}
-                max={maxDateStr}
-                disabled={marking}
-                onChange={(e) => {
-                  setSelectedDate(e.target.value);
-                  setMessage(null);
-                }}
-                className="input-field"
-              />
+                <button
+                  type="button"
+                  aria-label="Previous month"
+                  onClick={() => moveCalendar(-1)}
+                  disabled={
+                    marking ||
+                    calendarKey <= tomorrowStr.slice(0, 7)
+                  }
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-slate-700 hover:bg-slate-100 disabled:opacity-30"
+                >
 
-              <p className="mt-1 text-xs text-slate-400">
-                Select a date from tomorrow up to 1 month ahead.
+                  <ChevronLeft size={20} />
+
+                </button>
+
+                <p className="text-sm font-semibold text-slate-900">
+
+                  {getMonthName(calendarIndex)} {calendarYear}
+
+                </p>
+
+                <button
+                  type="button"
+                  aria-label="Next month"
+                  onClick={() => moveCalendar(1)}
+                  disabled={
+                    marking ||
+                    calendarKey >= maxDateStr.slice(0, 7)
+                  }
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-slate-700 hover:bg-slate-100 disabled:opacity-30"
+                >
+
+                  <ChevronRight size={20} />
+
+                </button>
+
+              </div>
+
+              {/* Weekdays */}
+              <div className="grid grid-cols-7 gap-1">
+
+                {[
+                  'Su',
+                  'Mo',
+                  'Tu',
+                  'We',
+                  'Th',
+                  'Fr',
+                  'Sa'
+                ].map((day) => (
+
+                  <div
+                    key={day}
+                    className="pb-3 text-center text-xs font-medium text-slate-500"
+                  >
+
+                    {day}
+
+                  </div>
+
+                ))}
+
+                {/* Empty cells before first date */}
+                {Array.from(
+                  { length: firstWeekday },
+                  (_, i) => (
+
+                    <div
+                      key={`blank-${i}`}
+                      aria-hidden="true"
+                    />
+
+                  )
+                )}
+
+                {/* Calendar dates */}
+                {Array.from(
+                  { length: calendarDays },
+                  (_, i) => {
+
+                    const day = i + 1;
+
+                    const date = localDate(
+                      new Date(
+                        calendarYear,
+                        calendarIndex,
+                        day
+                      )
+                    );
+
+                    const selected =
+                      selectedDates.includes(date);
+
+                    const booked =
+                      absences.some(
+                        (a) => a.absent_date === date
+                      );
+
+                    const error = validateDate(date);
+
+                    return (
+
+                      <button
+                        key={date}
+                        type="button"
+                        aria-label={`${dateLabel(date)}, ${calendarYear}${error ? `, ${error}` : ''}`}
+                        aria-pressed={selected}
+                        title={error || dateLabel(date)}
+                        disabled={
+                          marking ||
+                          (!!error && !selected)
+                        }
+                        onClick={() => toggleDate(date)}
+                        className={`mx-auto flex aspect-square w-full max-w-10 items-center justify-center rounded-full text-sm font-medium transition-colors ${
+                          selected
+                            ? 'bg-teal-600 text-white'
+                            : booked
+                              ? 'text-slate-400 line-through'
+                              : error
+                                ? 'text-slate-300'
+                                : 'bg-white text-slate-900 hover:bg-slate-100'
+                        }`}
+                      >
+
+                        {day}
+
+                      </button>
+
+                    );
+                  }
+                )}
+
+              </div>
+
+              <p className="mt-4 text-center text-xs text-slate-500">
+
+                Tap multiple dates to select them.
+                Tap again to deselect.
+
+              </p>
+
+              <p className="mt-1 text-center text-[11px] text-slate-400">
+
+                Grey dates are unavailable.
+                Crossed-out dates are already marked absent.
+
               </p>
 
             </div>
 
-            {/* Add another date */}
-            <button
-              type="button"
-              onClick={addDate}
-              disabled={marking || !selectedDate}
-              className="btn-secondary w-full disabled:opacity-50"
-            >
+            {/* Selected dates */}
+            <div className="flex items-center justify-between">
 
-              <span className="flex items-center justify-center gap-2">
+              <p className="text-sm font-semibold text-slate-900">
 
-                <CalendarPlus size={17} />
+                Selected Dates ({selectedDates.length})
 
-                Add Date
+              </p>
 
-              </span>
+              <button
+                type="button"
+                disabled={
+                  marking ||
+                  selectedDates.length === 0
+                }
+                onClick={() => {
+                  setSelectedDates([]);
+                  setMessage(null);
+                }}
+                className="text-xs font-medium text-slate-500 hover:text-slate-900 disabled:opacity-40"
+              >
 
-            </button>
+                Clear all
 
-            {/* Selected date list */}
+              </button>
+
+            </div>
+
             {selectedDates.length > 0 && (
 
-              <div className="space-y-2">
-
-                <div className="flex items-center justify-between">
-
-                  <p className="text-sm font-semibold text-slate-900">
-                    Selected Dates ({selectedDates.length})
-                  </p>
-
-                  <button
-                    type="button"
-                    disabled={marking}
-                    onClick={() => {
-                      setSelectedDates([]);
-                      setSelectedDate('');
-                      setMessage(null);
-                    }}
-                    className="text-xs font-medium text-slate-500"
-                  >
-                    Clear all
-                  </button>
-
-                </div>
+              <div className="flex flex-wrap gap-2">
 
                 {selectedDates.map((date) => (
 
-                  <div
+                  <button
                     key={date}
-                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3"
+                    type="button"
+                    disabled={marking}
+                    aria-label={`Remove ${dateLabel(date)}`}
+                    onClick={() => toggleDate(date)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700"
                   >
 
-                    <div className="flex items-center gap-2">
+                    {dateLabel(date)}
 
-                      <CalendarX
-                        size={16}
-                        className="text-slate-400"
-                      />
+                    <XCircle
+                      size={15}
+                      className="text-slate-400"
+                    />
 
-                      <span className="text-sm font-medium text-slate-700">
-                        {dateLabel(date)}
-                      </span>
-
-                    </div>
-
-                    <button
-                      type="button"
-                      aria-label={`Remove ${dateLabel(date)}`}
-                      disabled={marking}
-                      onClick={() => {
-                        setSelectedDates((dates) =>
-                          dates.filter((d) => d !== date)
-                        );
-
-                        setMessage(null);
-                      }}
-                      className="text-slate-400 hover:text-rose-600"
-                    >
-
-                      <XCircle size={18} />
-
-                    </button>
-
-                  </div>
+                  </button>
 
                 ))}
 
@@ -679,7 +832,7 @@ export function StudentHome({
             )}
 
             {/* Confirmation summary */}
-            {datesToConfirm.length > 0 && (
+            {selectedDates.length > 0 && (
 
               <div className="rounded-xl bg-slate-50 px-4 py-3">
 
@@ -695,9 +848,9 @@ export function StudentHome({
 
                   <span className="font-semibold text-slate-900">
 
-                    {datesToConfirm.length}{' '}
+                    {selectedDates.length}{' '}
 
-                    {datesToConfirm.length === 1
+                    {selectedDates.length === 1
                       ? 'day'
                       : 'days'}
 
@@ -712,7 +865,7 @@ export function StudentHome({
 
             )}
 
-            {/* Cancel and confirm buttons */}
+            {/* Cancel and confirm */}
             <div className="flex gap-2">
 
               <button
@@ -720,13 +873,14 @@ export function StudentHome({
                 disabled={marking}
                 onClick={() => {
                   setShowMarkAbsent(false);
-                  setSelectedDate('');
                   setSelectedDates([]);
                   setMessage(null);
                 }}
                 className="btn-secondary flex-1"
               >
+
                 Cancel
+
               </button>
 
               <button
@@ -735,15 +889,15 @@ export function StudentHome({
                 disabled={
                   marking ||
                   removingId !== null ||
-                  datesToConfirm.length === 0
+                  selectedDates.length === 0
                 }
                 className="btn-danger flex-1 disabled:opacity-50"
               >
 
                 {marking
                   ? 'Marking...'
-                  : datesToConfirm.length > 1
-                    ? `Confirm ${datesToConfirm.length} Absences`
+                  : selectedDates.length > 1
+                    ? `Confirm ${selectedDates.length} Absences`
                     : 'Confirm Absence'}
 
               </button>
@@ -754,7 +908,7 @@ export function StudentHome({
 
         )}
 
-        {/* Success or error message */}
+        {/* Success and error messages */}
         {message && (
 
           <div
@@ -764,7 +918,9 @@ export function StudentHome({
                 : 'bg-rose-50 text-rose-700 border border-rose-100'
             }`}
           >
+
             {message.text}
+
           </div>
 
         )}
@@ -777,7 +933,9 @@ export function StudentHome({
         <div className="card">
 
           <p className="text-sm font-bold text-slate-900 mb-3">
+
             Upcoming Absences
+
           </p>
 
           <div className="space-y-2">
@@ -806,7 +964,10 @@ export function StudentHome({
                   <button
                     type="button"
                     onClick={() => handleRemoveAbsence(a)}
-                    disabled={marking || removingId !== null}
+                    disabled={
+                      marking ||
+                      removingId !== null
+                    }
                     className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-rose-600 transition-colors disabled:opacity-50"
                   >
 
@@ -821,7 +982,9 @@ export function StudentHome({
                 ) : (
 
                   <span className="text-xs font-medium text-slate-400">
+
                     Locked
+
                   </span>
 
                 )}
@@ -833,15 +996,17 @@ export function StudentHome({
           </div>
 
           <p className="mt-2 text-xs text-slate-400">
+
             You can remove an upcoming absence before
             its cutoff to be marked present again.
+
           </p>
 
         </div>
 
       )}
 
-      {/* Pay Mess Fee */}
+      {/* Pay mess fee */}
       <button
         type="button"
         onClick={() => onNavigate('fees')}
@@ -859,11 +1024,15 @@ export function StudentHome({
           <div className="flex-1">
 
             <p className="text-sm font-bold text-slate-900">
+
               Pay Mess Fee
+
             </p>
 
             <p className="mt-0.5 text-xs text-slate-500">
+
               {presentDays} days present this month — tap to view your bill
+
             </p>
 
           </div>
@@ -874,7 +1043,7 @@ export function StudentHome({
 
       </button>
 
-      {/* Attendance statistics */}
+      {/* Quick statistics */}
       <div className="grid grid-cols-2 gap-3">
 
         <div className="card">
@@ -884,7 +1053,9 @@ export function StudentHome({
             <TrendingUp className="h-4 w-4 text-emerald-500" />
 
             <p className="text-xs font-medium text-slate-500">
+
               Days Present
+
             </p>
 
           </div>
@@ -894,13 +1065,17 @@ export function StudentHome({
             {presentDays}
 
             <span className="text-sm font-normal text-slate-400">
+
               {' '}/ {daysInMonth}
+
             </span>
 
           </p>
 
           <p className="text-xs text-slate-400">
+
             {getMonthName(month)} {year}
+
           </p>
 
         </div>
@@ -912,7 +1087,9 @@ export function StudentHome({
             <Clock className="h-4 w-4 text-amber-500" />
 
             <p className="text-xs font-medium text-slate-500">
+
               Days Absent
+
             </p>
 
           </div>
@@ -922,13 +1099,17 @@ export function StudentHome({
             {monthAbsences.length}
 
             <span className="text-sm font-normal text-slate-400">
+
               {' '}/ {daysInMonth}
+
             </span>
 
           </p>
 
           <p className="text-xs text-slate-400">
+
             {getMonthName(month)} {year}
+
           </p>
 
         </div>
