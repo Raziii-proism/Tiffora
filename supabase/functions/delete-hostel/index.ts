@@ -1,90 +1,192 @@
+
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const ADMIN_EMAIL = "mhdrazikp2007@gmail.com";
-const ADMIN_PASSWORD = "Razi@2007";
-
-function jsonResponse(body: Record<string, unknown>, status: number) {
+function jsonResponse(
+  body: Record<string, unknown>,
+  status = 200
+) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+    },
   });
-}
-
-function isAdminAuthorized(email?: string, password?: string): boolean {
-  return !!email && !!password && email.trim().toLowerCase() === ADMIN_EMAIL && password === ADMIN_PASSWORD;
 }
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: corsHeaders });
+    return new Response(null, {
+      status: 200,
+      headers: corsHeaders,
+    });
+  }
+
+  if (req.method !== "POST") {
+    return jsonResponse({
+      error: "Method not allowed."
+    }, 405);
   }
 
   try {
-    const { adminEmail, adminPassword, hostelId } = await req.json();
+    const {
+      adminEmail,
+      adminPassword,
+      hostelId
+    } = await req.json();
 
-    if (!isAdminAuthorized(adminEmail, adminPassword)) {
-      return jsonResponse({ error: "Invalid admin credentials." }, 403);
+    const expectedEmail =
+      Deno.env.get("ADMIN_EMAIL");
+
+    const expectedPassword =
+      Deno.env.get("ADMIN_PASSWORD");
+
+    const supabaseUrl =
+      Deno.env.get("SUPABASE_URL");
+
+    const serviceRoleKey =
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+    const adminUserId =
+      Deno.env.get("ADMIN_USER_ID");
+
+    if (
+      !expectedEmail ||
+      !expectedPassword ||
+      !supabaseUrl ||
+      !serviceRoleKey ||
+      !adminUserId
+    ) {
+      return jsonResponse({
+        error: "Server configuration missing."
+      }, 500);
     }
-    if (!hostelId) {
-      return jsonResponse({ error: "Hostel ID is required." }, 400);
+
+    // Verify using the same credentials as verify-admin
+    if (
+      typeof adminEmail !== "string" ||
+      typeof adminPassword !== "string" ||
+      adminEmail.trim().toLowerCase() !==
+        expectedEmail.trim().toLowerCase() ||
+      adminPassword !== expectedPassword
+    ) {
+      return jsonResponse({
+        error: "Invalid admin credentials."
+      }, 403);
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-    const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-
-    // Verify hostel exists
-    const { data: hostel, error: hostelError } = await adminClient
-      .from("hostels")
-      .select("id, name")
-      .eq("id", hostelId)
-      .maybeSingle();
-
-    if (hostelError || !hostel) {
-      return jsonResponse({ error: "Hostel not found." }, 404);
+    if (typeof hostelId !== "string" || !hostelId) {
+      return jsonResponse({
+        error: "Hostel ID is required."
+      }, 400);
     }
 
-    // Get wardens and students to clean up their auth accounts
-    const [{ data: wardens }, { data: students }] = await Promise.all([
-      adminClient.from("wardens").select("id").eq("hostel_id", hostelId),
-      adminClient.from("students").select("id").eq("hostel_id", hostelId),
+    const adminClient = createClient(
+      supabaseUrl,
+      serviceRoleKey,
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+        },
+      }
+    );
+
+    const { data: hostel, error: hostelError } =
+      await adminClient
+        .from("hostels")
+        .select("id, name")
+        .eq("id", hostelId)
+        .maybeSingle();
+
+    if (hostelError) {
+      return jsonResponse({
+        error: "Unable to retrieve hostel."
+      }, 500);
+    }
+
+    if (!hostel) {
+      return jsonResponse({
+        error: "Hostel not found."
+      }, 404);
+    }
+
+    const [wardens, students] = await Promise.all([
+      adminClient
+        .from("wardens")
+        .select("id")
+        .eq("hostel_id", hostelId),
+
+      adminClient
+        .from("students")
+        .select("id")
+        .eq("hostel_id", hostelId),
     ]);
 
-    // Delete hostel (cascades to public tables: students, wardens, bills, absences, mess_leaves, expense_items, menu_items)
+    if (wardens.error || students.error) {
+      return jsonResponse({
+        error: "Unable to retrieve hostel accounts."
+      }, 500);
+    }
+
+    const userIds = [
+      ...new Set([
+        ...(wardens.data || []).map(w => w.id),
+        ...(students.data || []).map(s => s.id),
+      ]),
+    ];
+
+    if (userIds.includes(adminUserId)) {
+      return jsonResponse({
+        error: "Cannot delete hostel linked to admin."
+      }, 409);
+    }
+
     const { error: deleteError } = await adminClient
       .from("hostels")
       .delete()
       .eq("id", hostelId);
 
     if (deleteError) {
-      return jsonResponse({ error: deleteError.message }, 400);
+      return jsonResponse({
+        error: deleteError.message
+      }, 400);
     }
 
-    // Clean up auth users
-    const userIdsToDelete = [
-      ...(wardens || []).map((w: { id: string }) => w.id),
-      ...(students || []).map((s: { id: string }) => s.id),
-    ];
+    let failedAccounts = 0;
 
-    for (const uid of userIdsToDelete) {
+    for (const uid of userIds) {
       try {
-        await adminClient.auth.admin.deleteUser(uid);
+        const { error } =
+          await adminClient.auth.admin.deleteUser(uid);
+
+        if (error) failedAccounts++;
       } catch {
-        // ignore if already deleted
+        failedAccounts++;
       }
     }
 
-    return jsonResponse({ success: true, hostelName: hostel.name }, 200);
+    return jsonResponse({
+      success: true,
+      hostelName: hostel.name,
+      failedAccounts,
+      warning: failedAccounts > 0
+        ? "Some accounts require manual cleanup."
+        : null,
+    });
+
   } catch (err) {
-    return jsonResponse({ error: (err as Error).message }, 500);
+    console.error("Delete hostel error:", err);
+
+    return jsonResponse({
+      error: "An unexpected server error occurred."
+    }, 500);
   }
 });
